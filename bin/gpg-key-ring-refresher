@@ -1,0 +1,1465 @@
+#!/usr/bin/perl
+#
+# GPG key ring refresher for autonomous updating of big public key rings.
+#
+# Copyright (C) 2020 Mika Silander & CSC - IT Centre for Science Ltd, www.csc.fi
+# 
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+use strict;
+use Getopt::Std;
+use POSIX ":sys_wait_h";
+use Log::Log4perl qw(get_logger);
+use Digest::MD5 qw(md5_hex md5_base64);
+
+package Key;
+
+our $logger = Log::Log4perl::get_logger(__PACKAGE__);
+
+sub new {
+    my ($class, $id) = @_;
+    my $self = {
+	'id' => $id,
+        'tried_keyservers' => {},
+        'status' => 0, # 0 = not searched for, 1 = searched for but not found,
+	               # 2 = not changed, 3 = changed
+    };
+
+    bless $self, $class;
+}
+
+sub getId {
+    $_[0]->{'id'};
+}
+
+sub getTriedKeyServers {
+    $_[0]->{'tried_keyservers'};
+}
+
+sub addSourceKeyServer {
+    my ($self, $sourceservername) = @_;
+    ${$self->{'tried_keyservers'}}{$sourceservername} = 1;
+}
+
+sub addTriedKeyServer {
+    my ($self, $triedservername) = @_;
+    ${$self->{'tried_keyservers'}}{$triedservername} = 0;
+}
+
+sub getTryCount {
+    scalar(keys %{$_[0]->{'tried_keyservers'}});
+}
+
+# 0 = not searched for, 1 = searched for but not found,
+# 2 = not changed, 3 = changed
+sub getStatus {
+    $_[0]->{'status'};
+}
+
+sub setStatus {
+    my ($self, $status) = @_;
+    $logger->fatal("Illegal key status $status") if ($status !~ /^[0-3]$/o);
+    $self->{'status'} = $status;
+}
+
+sub eligible {
+    my ($self, $servername) = @_;
+    return 1 if ($self->{'status'} == 0);
+    return 1 if (($self->{'status'} == 1) and
+		 (!exists ${$self->{'tried_keyservers'}}{'servername'}));
+    0;
+}
+
+sub stats {
+    my $self = shift;
+    my ($servername, $hit, $msg);
+
+    $hit = undef;
+    if ($self->getStatus() >= 2) {
+	while (($servername, $hit) = each %{$self->{'tried_keyservers'}}) {
+	    last if $hit;
+	}
+    }
+
+    $msg = "Key $self->{'id'} (status $self->{'status'}/tries " .
+	$self->getTryCount() . (defined $hit ? "/source $servername)" : "/not found)");
+
+    $logger->is_warn() ? $logger->warn($msg) : $logger->info($msg);
+}
+
+package KeyIdBookie;
+
+our $logger = Log::Log4perl::get_logger(__PACKAGE__);
+
+sub new {
+    my ($class, $keyidentifiers, $max_retries, $chunksize) = @_;
+    my $self;
+    my %KEYS = ();
+    
+    foreach (@{$keyidentifiers}) {
+	$KEYS{$_} = Key->new($_);
+    }
+    
+    $self = {
+	'not_found_keys' => \%KEYS,
+	'unchanged_keys' => {},
+	'changed_keys' => {},
+	'max_retries' => $max_retries, # set to number of key servers configured	    
+        'chunksize' => $chunksize,
+    };
+    
+    bless $self, $class;
+}
+
+# Return the max chunksize of the least fetched keys to be refreshed from
+# the given key server.
+sub getKeyChunkToRefresh {
+    my ($self, $servername) = @_;
+    my $nf = $self->{'not_found_keys'};
+    my @bloodyexperimentalspliceonscalarforbidden =
+	sort _keytrycountcmp (grep { $_->getTryCount() < $self->{'max_retries'} } (grep { $_->eligible($servername) } values %{$nf}));
+
+    # return chunksize elements of least fetched Keys
+    (splice (@bloodyexperimentalspliceonscalarforbidden, 0, $self->{'chunksize'}));
+}
+
+sub _keytrycountcmp {
+    $a->getTryCount() <=> $b->getTryCount();
+}
+
+sub recordKeyInfo {
+    my ($self, $server, $not_changed_r, $changed_r,
+	$not_found_due_to_refresh_failure_r, $refreshed_but_not_found_r) = @_;
+
+    $server = $server->getName();
+    $self->addUnchangedKeys($server, $not_changed_r);
+    $self->addChangedKeys($server, $changed_r);
+    $self->notFoundKeysDueToFailure($server, $not_found_due_to_refresh_failure_r);
+    $self->refreshedButNotFoundKeys($server, $refreshed_but_not_found_r);
+}
+
+sub addUnchangedKeys {
+    my ($self, $servername, $idlist) = @_;
+    my ($key, $id);
+    my $nf = $self->{'not_found_keys'};
+    my $u = $self->{'unchanged_keys'};
+
+    for $id (@{$idlist}) {
+	# store the server we found the key data from and
+	# move key to the unchanged ones
+	$key = $nf->{$id};
+	$key->addSourceKeyServer($servername);
+	$key->setStatus(2);
+	$u->{$id} = $key;
+	# remove from not found key ids
+	delete $nf->{$id};
+    }
+}
+
+sub addChangedKeys {
+    my ($self, $servername, $idlist) = @_;
+    my ($key, $id);
+    my $nf = $self->{'not_found_keys'};
+    my $c = $self->{'changed_keys'};
+
+    for $id (@{$idlist}) {
+	# store the server we found the key data from and
+	# move key to the changed ones
+	$key = $nf->{$id};
+	$key->addSourceKeyServer($servername);
+	$key->setStatus(3);
+	$c->{$id} = $key; 
+	# remove from not found key ids
+	delete $nf->{$id};
+    }
+}
+
+sub notFoundKeysDueToFailure {
+    # no op
+}
+
+sub refreshedButNotFoundKeys {
+    my ($self, $servername, $idlist) = @_;
+    my ($key, $id);
+    my $nf = $self->{'not_found_keys'};
+
+    for $id (@{$idlist}) {
+	# We remember the server that was unable to provide info on this key.
+	$key = $nf->{$id};
+	$key->addTriedKeyServer($servername);
+	$key->setStatus(1);
+    }
+}
+
+sub stats {
+    my $self = shift;
+    my @nf = ();
+    
+    for my $s ('unchanged_keys', 'changed_keys') {
+	$logger->info("Number of ", join(" ", split("_", $s)), " : ",
+		      scalar(keys %{$self->{$s}}));
+	if ($logger->is_debug()) {
+	    for my $k (values %{$self->{$s}}) {
+		$k->stats();
+	    }
+	}
+    }
+
+    @nf = values %{$self->{'not_found_keys'}}; 
+    if (!@nf) {
+	$logger->info("Number of keys not found : 0");
+	return;
+    }
+
+    $logger->warn("Number of keys not found : ", scalar(@nf));
+    $logger->warn("Add keys not found to the preskiplist, ask their owners to upload them,");
+    $logger->warn("or, configure new key servers that can provide info about them.");
+    foreach (@nf) {
+	$_->stats();
+    }
+}
+
+package KeyServer;
+
+our $logger = Log::Log4perl::get_logger(__PACKAGE__);
+
+sub new {
+    my ($class, $servername, $max_num_consecutively_failed_requests,
+	$max_refr_wait_secs) = @_;
+    my $self = {
+	'name' => $servername,
+    	'max_num_consecutively_failed_requests' => $max_num_consecutively_failed_requests,
+	'quality' => 4, # guarantees all configured servers are tried at least once
+	'num_requests_initiated' => 0,
+	'num_requests_failed' => 0,
+	'num_requests_partial' => 0,
+	'num_requests_successful' => 0,
+	'keys_retrieved' => 0,
+	'keys_not_found' => 0,
+	'last_refresh_attempt_killed' => 0,
+	'working_dir_updated_in_last_refresh' => 0,
+	'max_refresh_wait_secs' => (defined $max_refr_wait_secs ? $max_refr_wait_secs : 240),
+	'consecutive_failure_count' => 0,
+	'prev_request_status' => "ok" # ok or failure    
+    };
+    
+    bless $self, $class;
+}
+
+sub eligible {
+    my $self = shift;
+
+    return 1 if ($self->{'max_num_consecutively_failed_requests'} >
+		 $self->{'consecutive_failure_count'});
+    0;
+}
+
+sub getName {
+    $_[0]->{'name'};
+}
+
+sub getQuality {
+    $_[0]->{'quality'};
+    # see updating of quality from the end of the method _updateKeyServerState.
+}
+
+sub attemptKeyUpdate {
+    my ($self, $gpgcmd, $gnupgworkdir, $gpgrefreshoutputfile, @keys) = @_;
+    my ($pid, $starttime, $sleeptime);
+    my ($status, $iwaited);
+    my $maxwaitsecs = $self->{'max_refresh_wait_secs'};
+    my $refresh_attempt_was_killed;
+    my $keyinfo;
+    my ($killcount, $killrounds);
+    
+    if ($pid = fork()) {
+	# parent
+	${$self}{'num_requests_initiated'} += 1;
+	$self->{'last_refresh_attempt_killed'} = 0;
+	$self->{'working_dir_updated_in_last_refresh'} = 0;
+
+	$starttime = time();
+	$iwaited = 0;
+	while ((! -e "$gpgrefreshoutputfile") &&
+	       (time() - $starttime < $maxwaitsecs)) {
+	    # wait 2 seconds before each check that the gpg refresh process
+	    # has truly started
+            sleep 2;
+	}
+	
+	if (! -e "$gpgrefreshoutputfile") {
+	    $logger->fatal("gpg refresh subprocess failed to start successfully");
+	    return ("", 5);
+	}
+
+	$status = 1;
+	while (time() - $starttime < $maxwaitsecs && ($status > 0)) {
+	    # wait 5 seconds before each check of gpg refresh subprocess status.
+	    $logger->debug("Waiting on child $pid for 5 secs before checking ...");
+	    sleep 5;
+	    $status = waitpid $pid, 'WNOHANG';
+	    $logger->debug("Waited on child $pid (waitpid gave $status)");
+	    $iwaited = 1;
+	}
+
+	$refresh_attempt_was_killed = 0;
+	if ((time() - $starttime >= $maxwaitsecs) or ($status != -1 and $iwaited)) {
+            $killrounds = 0;
+            do {
+		$killcount = kill 'KILL', $pid;
+            } while (!$killcount and $killrounds++ < 4);
+            $status = waitpid $pid, 'WNOHANG';
+            $logger->debug("After kill attempt waitpid $pid gave $status");
+	    $refresh_attempt_was_killed = 1;
+	    if (!$status) {
+		# update counters even in the case of a complete failure
+		$self->_updateKeyServerState($refresh_attempt_was_killed,
+					     [], [], [ @keys ], []);
+		$logger->fatal("Failed to kill gpg key refresh process (status $status)");
+		return ("", 6);
+	    }
+	}
+	else {
+	    $logger->debug("Child $pid terminated successfully");
+	}
+	
+	$logger->debug("Refresh subprocess ",
+		       $refresh_attempt_was_killed ? "was killed" : "terminated normally");
+	$self->{'last_refresh_attempt_was_killed'} = $refresh_attempt_was_killed;
+	($keyinfo, $status) = $self->_analyseKeyRefreshInfo($gpgrefreshoutputfile, @keys);
+
+	if ($logger->is_debug()) {
+	    my $i = 0;
+	    my @tki = @{$keyinfo};
+	    my $sname = $self->{'name'};
+	    for my $type ('Not changed', 'Updated', 'No info given', 'Not known') {
+		if (!@{$tki[$i]}) {
+		    $logger->debug("$type : 0 keys");
+		}
+		else {
+		    for my $tkey (@{$tki[$i]}) {
+			$logger->debug("$type $tkey on $sname");
+		    }
+		}
+		$i++;
+	    }
+	}
+	
+	return ($keyinfo, $status) if ($status);
+
+	# Update the key server's internal counters
+	$self->_updateKeyServerState($refresh_attempt_was_killed, @{$keyinfo});
+
+	if ($refresh_attempt_was_killed) {
+	    return ([$keyinfo->[0], [], $keyinfo->[2], []], 0);
+	}
+	else {
+	    # Refresh attempt terminated successfully, return the key info found.
+	    return ($keyinfo, 0);
+	}
+    }
+    elsif (defined $pid) {
+	# child
+	my @cmdandargs = (
+	    "$gpgcmd", "--homedir", "$gnupgworkdir",
+	    "--batch", "--no-tty", "--keyserver-option",
+	    "include-revoked,include-subkeys",
+	    "--keyserver", "$self->{'name'}", "--refresh-keys",
+	    map { $_->getId() } @keys);
+	my $cmd = join(" ", @cmdandargs, " 2> $gpgrefreshoutputfile");
+
+	$logger->debug("Starting child $cmd");
+	$logger->fatal("Failed to open $gpgrefreshoutputfile")
+	    if (!open STDOUT, ">$gpgrefreshoutputfile");
+	select STDOUT; $| = 1;
+	open STDERR, ">&STDOUT";
+	select STDERR; $| = 1;
+	$logger->fatal("Child $pid: failed to start $cmd, error $!")
+	    if (!exec (@cmdandargs));
+	exit(0);
+    }
+    elsif ($! =~ /No more process/o) {
+	# we can retry, but we don't ...
+	$logger->fatal("Kernel process table full, forking failed");
+	return ("", 7);
+    }
+    else {
+	# fork failure
+	$logger->fatal("Failed to fork gpg key ring refresh process");
+	return ("", 8);
+    }
+    
+    ("gpg refresh attempt succeeded", 0);
+}
+
+sub _analyseKeyRefreshInfo {
+    my ($self, $gpgrefreshoutputfile, @keys) = @_;
+    my %notchanged = ();
+    my %changed = ();
+    my ($line, $keyid, $keyinfo);
+
+    my %allkeys = ( map { $_->getId() => 0 } @keys );
+ 
+    if (open(REFRFH, "$gpgrefreshoutputfile")) {
+	while ($line = <REFRFH>) {
+	    if ($line =~ /^gpg:\skey\s(?:0x)?([a-fA-F\d]{16})\:\s\"[^\"]+\"\s(.+)\s*$/o) {
+		# we hit an info line
+		$keyid = $1;
+		$keyinfo = $2;
+		if ($keyinfo =~ /not changed/o) {
+#		    $logger->debug("Not changed : $keyid");
+		    $notchanged{$keyid} = 1;
+		}
+		elsif ($keyinfo =~ /^.*(?:\d+\snew\ssignatures?|\d+\snew\ssubkeys?|revocation\scertificates?\sadded|\d+\snew\suser\sIDs?)$/o) {
+#		    $logger->debug("Updated : $keyid");
+		    $changed{$keyid} = 1;
+		}
+		else {
+		    $logger->fatal("Found a new refresh response type :$keyinfo: for $keyid");
+		    return ("", 9);
+		}
+		delete $allkeys{$keyid};
+	    }
+	}
+	close(REFRFH);
+
+	if ($self->{'last_refresh_attempt_killed'}) {
+	    return ([ [ keys %notchanged ], [ keys %changed ],
+		      [ keys %allkeys ], [ ] ], 0);
+	}
+	else {
+	    return ([ [ keys %notchanged ], [ keys %changed ],
+		      [ ], [ keys %allkeys ] ], 0);
+	}
+    }
+    ("Failed to open $gpgrefreshoutputfile", 10);
+}
+
+sub _updateKeyServerState {
+    my ($self, $last_refresh_attempt_killed,
+	$not_changed_r, $changed_r, $not_found_r,
+	$searched_for_but_not_found_r) = @_;
+
+    my @notchanged = @{$not_changed_r};
+    my @changed = @{$changed_r};
+    my @notfound = (@{$not_found_r}, @{$searched_for_but_not_found_r});
+
+    # We record this for knowing if, when and how we can update the
+    # master copy (intact) and working key rings.
+    if ($self->{'last_refresh_attempt_killed'} = $last_refresh_attempt_killed) {
+	if ((!@notfound) and (!@changed)) {
+	    # all keys refreshed had no changes - success
+	    $self->{'num_requests_successful'} += 1;
+	    $self->{'consecutive_failure_count'} = 0;
+	    $self->{'prev_request_status'} = "ok";
+	}
+	elsif (@notchanged) {
+	    # only some keys found where not changed - partial success
+	    $self->{'num_requests_partial'} += 1;
+	    $self->{'consecutive_failure_count'} = 0;
+	    $self->{'prev_request_status'} = "ok";
+	}
+	else {
+	    # not changed count is 0 so we failed completely
+	    $self->{'num_requests_failed'} += 1;
+	    $self->{'consecutive_failure_count'} += 1;
+	    $self->{'prev_request_status'} = "failure";
+	}
+	$self->{'working_dir_updated_in_last_refresh'} = 0;
+	$self->{'keys_retrieved'} += scalar(@notchanged);
+	$self->{'keys_not_found'} += (scalar(@changed) + scalar(@notfound));
+    }
+    else {
+	# the gpg refresh finished successfully, the working ring dir
+	# is intact
+	if ((!@notchanged) and (!@changed)) {
+	    # complete failure
+	    $self->{'num_requests_failed'} += 1;
+	    $self->{'consecutive_failure_count'} += 1;
+	    $self->{'prev_request_status'} = "failure";
+	}
+	elsif (!@notfound) {
+	    # Success! We found info on all keys requested.
+	    $self->{'num_requests_successful'} += 1;
+	    $self->{'consecutive_failure_count'} = 0;
+	    $self->{'prev_request_status'} = "ok";
+	}
+	else {
+	    # Partial success
+	    $self->{'num_requests_partial'} += 1;
+	    $self->{'consecutive_failure_count'} = 0;
+	    $self->{'prev_request_status'} = "ok";
+	}
+	$self->{'working_dir_updated_in_last_refresh'} = 1 if (@changed);
+	$self->{'keys_retrieved'} += (scalar(@changed) + scalar(@notchanged));
+	$self->{'keys_not_found'} += scalar(@notfound);
+    }
+
+    # update key server quality
+    $self->{'quality'} =
+	$self->{'num_requests_successful'}/$self->{'num_requests_initiated'} +
+	$self->{'num_requests_partial'}/$self->{'num_requests_initiated'} +
+	$self->{'keys_retrieved'}/($self->{'keys_retrieved'} +
+				   $self->{'keys_not_found'});
+}
+
+sub isWorkRingDirIntactAfterLastRefresh {
+    $_[0]->{'last_refresh_attempt_killed'} == 0;
+}
+   
+sub wasWorkRingDirUpdatedInLastRefresh {
+    $_[0]->{'working_dir_updated_in_last_refresh'};
+}
+
+sub stats {
+    my $self = shift;
+    my $f;
+
+    $logger->info("$self->{'name'} provided info on $self->{'keys_retrieved'} keys, reqs (s=$self->{'num_requests_successful'}/p=$self->{'num_requests_partial'}/f=$self->{'num_requests_failed'}/t=$self->{'num_requests_initiated'}) endstate=",
+	($self->eligible() ? "responding" : "unresponsive"));
+}
+
+package KeyServerBookie;
+
+our $logger = Log::Log4perl::get_logger(__PACKAGE__);
+
+sub new {
+    my ($class, $servernames, $max_num_consecutively_failed_requests,
+	$max_refr_wait_secs) = @_;
+    my $self;
+    my %keyservers = ();
+    my ($s, $ks);
+    
+    for $s (@{$servernames}) {
+	$ks = KeyServer->new($s,
+			     $max_num_consecutively_failed_requests,
+			     $max_refr_wait_secs);
+	$keyservers{$s} = $ks;
+    }
+    $self = {
+	'keyservers' => \%keyservers
+    };
+    
+    bless $self, $class;
+}
+
+sub _keyservercmp {
+    $b->getQuality() <=> $a->getQuality();
+}
+
+sub orderKeyServersBestFirst {
+    my $self = shift;
+    my @damnexperimentalshiftonscalarforbidden =
+	sort _keyservercmp grep { $_->eligible() } values %{$self->{'keyservers'}};
+    @damnexperimentalshiftonscalarforbidden;
+}
+
+sub stats {
+    my $self = shift;
+    for my $ks (values %{$self->{'keyservers'}}) {
+	$ks->stats();
+    }
+}
+
+package KeyRingManager;
+
+use Fcntl qw(:DEFAULT :flock);
+
+our $logger = Log::Log4perl::get_logger(__PACKAGE__);
+
+# Store the name of the master GNUPGHOME directory that is going to be
+# updated.
+sub new {
+    my ($class, $masterdir, $temptopdir, $gpgexec, $copyexec) = @_;
+    my $self = {
+	'masterringdir' => $masterdir,
+        'temptopdir' => $temptopdir,
+        'mastercopydir' => "$temptopdir/mastercopy",
+        'workringdir' => "$temptopdir/workring",
+	'gpgexecutable' => $gpgexec,
+	'copyexecutable' => $copyexec,
+        'files_to_manage' => { 'pubring.kbx' => undef,
+			       'trustdb.gpg' => undef },
+        'pidfilehandle' => undef,
+        'skip_tempdir_deletion' => 0,
+	'successfulupdates' => 0
+    };
+
+    bless $self, $class;
+}
+
+# Create temporary directories, create a master copy and work ring
+# GNUPGHOME directory from the master ring that is going to be updated.
+sub init {
+    my $self = shift;
+    my $tempfiledir = $self->{'temptopdir'};
+    my @dirlist = (split("/", $tempfiledir));
+    my $path = "";
+    my @fullpath = ();
+    my ($pidfh, $inode, $pid, $in, $pidfound, $filename, $mfh);
+
+    if (! -d $self->{'masterringdir'}) {
+	$logger->fatal("Master ring $self->{'masterringdir'} doesn't exist");
+	return ("", 11);
+    }
+
+    if (!sysopen($pidfh, "$self->{'masterringdir'}/gpg-key-ring-refresher.pid",
+		O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK)) {
+	$inode = (stat("$self->{'masterringdir'}/gpg-key-ring-refresher.pid"))[1];
+        if (open(PROCLFH, "/proc/locks")) {
+	    # we do our best to find out who's the culprit
+	    $pidfound = -1;
+	    while (my $lockinfo = <PROCLFH>) {
+		($pid, $in) = (split(/[:\s]+/,$lockinfo))[4,7];
+		if ($in == $inode) {
+		    $logger->fatal("Process $pid has already locked master ring pid file");
+		    $pidfound = $pid;
+		    last;
+		}
+	    }
+	    close(PROCLFH);
+        }
+        if ($pidfound == -1) {
+	    # someone just left a pid file laying around and not cleaning it up,
+	    # but he is not running anymore.
+	    # we can try to unlink it and then recreate it.
+	    unlink "$self->{'masterringdir'}/gpg-key-ring-refresher.pid";
+        }
+        # we retry
+	if (!sysopen($pidfh, "$self->{'masterringdir'}/gpg-key-ring-refresher.pid",
+		     O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK)) {
+	    $logger->fatal("Unable to create new master ring pid file.");
+	    return ("", 12);
+        }
+    }
+
+    # Success!
+
+    if (!flock($pidfh, LOCK_EX|LOCK_NB)) {
+	$logger->fatal("Failed to write lock master ring gpg-key-ring-refresher.pid");
+	return ("", 13);
+    }
+
+    # locked opening of pid file succeeded.
+    print $pidfh "$$\n";
+    $self->{'pidfilehandle'} = $pidfh;
+    
+    for $filename (keys %{$self->{'files_to_manage'}}) {
+	my $md5 = Digest::MD5->new;
+	if (!sysopen($mfh, "$self->{'masterringdir'}/$filename",
+		     O_RDONLY|O_NONBLOCK)) {
+	    $logger->fatal("Failed to open master ring $filename");
+	    return ("", 14);
+	}
+	$md5->addfile($mfh);
+	close($mfh);
+	my @statinfo = stat "$self->{'masterringdir'}/$filename";
+	${$self->{'files_to_manage'}}{$filename} =
+            { 'userid' => "$statinfo[4]",
+	      'groupid' => "$statinfo[5]",
+	      'size' => "$statinfo[7]",
+	      'md5' => $md5->b64digest(),
+	      'accessmode' => sprintf("%04o",$statinfo[2] & 07777) };
+    }
+    
+    shift @dirlist;
+    while (defined(my $dir = shift @dirlist)) {
+        $path .= "/$dir";
+	if (! -d "$path") {
+	    push @fullpath, $path;
+	    last;
+	}
+	else {
+	    $logger->debug("Dir $path exists");
+	}
+    }
+
+    $logger->warn("Temp dir $self->{'temptopdir'} exists already, we overwrite its contents")
+        if (!@fullpath);
+    
+    # Create necessary temp dirs for temp files
+    for my $dir (@dirlist) {
+	push @fullpath, $path;
+	$path .= "/$dir";
+    }
+    
+    push @fullpath, ($self->{'mastercopydir'}, $self->{'workringdir'});
+
+    # Creating the missing dirs in the temp dir tree one by one working
+    # downwards the dir tree one level at a time.
+    while (my $dir = shift @fullpath) {
+	next if (-d "$dir"); # 
+	if (! mkdir "$dir") {
+	    $self->close();
+	    $logger->fatal("Failed to create temp dir $dir");
+	    return ("", 15);
+	}
+    }
+
+    $logger->info("Set up temp ring dir $self->{'temptopdir'}");
+
+    # Setting up the mastercopy and workring gnupg dirs.
+    $self->_copyring($self->{'masterringdir'}, $self->{'mastercopydir'});
+    $self->_copyring($self->{'mastercopydir'}, $self->{'workringdir'});
+    ("", 0);
+}
+
+sub getActiveKeyIds {
+    my $self = shift;
+    my $allpubkeysinmasterring = `$self->{'gpgexecutable'} --homedir $self->{'mastercopydir'} --batch --no-tty --keyid-format=long --list-keys 2> /dev/null`;
+
+    if ($? != 0) {
+	$logger->fatal("Failed to list public keys from $self->{'mastercopydir'}");
+	return ("", 16);
+    }
+
+    ([map { $_ =~ m#^pub\s+[^/]+/(\S+)\s#; $1; }
+      grep !/\[(?:revoked|expired):\s/o,
+      (grep /^pub\s.*/o, split(/\n/, $allpubkeysinmasterring))], 0);
+}
+
+sub getMasterRingDir {
+    $_[0]->{'masterringdir'};
+}
+
+sub deleteGPGRefreshRunFilesFromWorkRingDir {
+    my $self = shift;
+    my $absdirname = $self->{'workringdir'};
+
+    for my $fname ('gpg-refresh-run.output', 'S.dirmngr', 'S.gpg-agent',
+		'S.gpg-agent.ssh', 'S.gpg-agent.browser', 'S.gpg-agent.extra') {
+        unlink "$absdirname/$fname"
+            if (-e "$absdirname/$fname");
+    }
+}
+
+# Copy from one GPG dir to another, absolute and relative paths are allowed.
+# Assumes source and target dirs exist.
+sub _copyring {
+    my ($self, $fromdir, $todir) = @_;
+
+    # Turn relative paths to absolute 
+    $fromdir = "$self->{'temptopdir'}/$fromdir" if ($fromdir !~ m#^/#o);
+    $todir = "$self->{'temptopdir'}/$todir" if ($todir !~ m#^/#o);
+
+    if (! -d "$fromdir") {
+	$logger->fatal("GPG source dir $fromdir doesn't exist");
+	return ("", 17);
+    }
+    if (! -d "$todir") {
+	$logger->fatal("GPG target dir $todir doesn't exist");
+        return ("", 18);
+    }
+
+    for my $file (keys %{$self->{'files_to_manage'}}) {
+	`$self->{'copyexecutable'} $fromdir/$file $todir/$file`;
+        if ($? != 0) {
+	    $logger->fatal("Failed to copy $file to $todir.");
+	    return ("", 19);
+	}
+    }
+    $self->deleteGPGRefreshRunFilesFromWorkRingDir();
+}
+
+# Copy the master copy ring (in consistent state) over to work ring
+# (the work ring is potentially in an inconsistent state).
+sub reinstateWorkRingFromMasterCopy {
+    my $self = shift;
+    $self->_copyring($self->{'mastercopydir'}, $self->{'workringdir'});
+}
+
+# Copy the successfully updated work ring (in consistent state) over to
+# the master copy ring (the master copy is in previous consistent state).
+sub updateMasterCopyFromWorkRing {
+    my $self = shift;
+
+    $self->_copyring($self->{'workringdir'}, $self->{'mastercopydir'});
+    $self->{'successfulupdates'} = 1;
+}
+
+sub close {
+    my $self = shift;
+    my ($filename, $fmeta, $mfh);
+    my $master_changed_while_refreshing = 0;
+    
+    if ($self->{'successfulupdates'}) {
+        while (($filename, $fmeta) = 
+	       each %{$self->{'files_to_manage'}}) {
+	    my $md5 = Digest::MD5->new();
+	    if (!open($mfh, "$self->{'masterringdir'}/$filename")) {
+		$logger->fatal("Failed to open master $filename");
+		$master_changed_while_refreshing = 1;
+		next;
+	    }
+	    my $size = (stat "$self->{'masterringdir'}/$filename")[7];
+	    $md5->addfile($mfh);
+	    close($mfh);
+	    if (($md5->b64digest() ne $fmeta->{'md5'}) or 
+		($size != $fmeta->{'size'})) {
+		$logger->fatal("Master $filename has changed while refreshing");
+		$master_changed_while_refreshing = 1;
+	    }
+       }
+
+       if (!$master_changed_while_refreshing) {
+	  # copy mastercopy over to true master ring!
+	  $self->_copyring($self->{'mastercopydir'}, $self->{'masterringdir'});
+
+	  # Restore collected file meta data against the master key
+	  # ring files.
+	  while (($filename, $fmeta) = 
+		 each %{$self->{'files_to_manage'}}) {
+	      my %orig = %{$fmeta};
+	      my $absfilename = "$self->{'masterringdir'}/$filename";
+	      my @statinfo = stat "$absfilename";
+	      my %seen = ( 'userid' => "$statinfo[4]",
+			   'groupid' => "$statinfo[5]",
+			   'accessmode' => sprintf("%04o",$statinfo[2] & 07777) );
+	      for my $attr ('accessmode', 'userid', 'groupid') {
+		  my $changecount = 0;
+		  next if ("$orig{$attr}" eq "$seen{$attr}");
+		  if ($attr eq "accessmode") {
+		      $changecount = chmod oct($orig{'accessmode'}), "$absfilename";
+		  }
+		  elsif ($attr eq "userid") {
+		      # uid and gid
+		      $changecount = chown $orig{'userid'}, -1, "$absfilename";
+		  }
+		  elsif ($attr eq "groupid") {
+		      # uid and gid
+		      $changecount = chown -1, $orig{'groupid'}, "$absfilename";
+		  }
+
+		  if ($changecount != 1) {
+		      $logger->fatal("Failed to restore $attr to $orig{$attr} on $absfilename");
+		      return ("", 20);
+		  }
+	      }
+	  }
+	  $logger->info("Master key ring was updated.");
+      }
+      else {
+	  $self->{'skip_tempdir_deletion'} = 1;
+	  $logger->fatal("Leaving updated copy of the master key ring into ",
+			 $self->{'mastercopyringdir'});
+      }
+   }
+
+   if (!$self->{'successfulupdates'} or $master_changed_while_refreshing) {
+       $logger->info("Master key ring not updated - no new key info found.");
+   }
+
+   if (!$self->{'skip_tempdir_deletion'}) {
+       $logger->info("Deleting temp ring dir $self->{'temptopdir'}");
+       $self->_deletetempringdirs($self->{'temptopdir'});
+   }
+
+    # Removing pid file.
+    unlink "$self->{'masterringdir'}/gpg-key-ring-refresher.pid"
+	if (-e "$self->{'masterringdir'}/gpg-key-ring-refresher.pid");
+
+    ("", 0);
+}
+
+sub _deletetempringdirs {
+    my ($self, $dirname) = @_;
+    my $dh;
+    my @names = ();
+
+    if (!opendir($dh, "$dirname")) {
+	$logger->fatal("Failed to open directory $dirname for removal");
+	return;
+    }
+
+    @names = map { "$dirname/$_" } (grep { $_ !~ /^\.\.?$/go } readdir($dh));
+    closedir($dh);
+
+    foreach my $e (@names) {
+	if (-d $e) {
+	    $self->_deletetempringdirs($e);
+	}
+	else {
+	    unlink $e;
+	}
+    }
+    rmdir "$dirname";
+}
+
+
+package main;
+
+our $logger = get_logger(__PACKAGE__);
+
+sub usage() {
+    my $thiscommand = shift;
+    
+"
+A programme for refreshing a GPG2 key ring against info from PGP key servers.
+
+    $thiscommand { -c conf_file_name | -H } [ -g gnupghomedir | -w seconds |
+		   -s seconds | -r max_seconds | -k number | -f number ]
+                  refresh
+    $thiscommand -h
+    $thiscommand { [ -c conf_file_name ] showconf | help }
+
+    Options:
+      -c = use given configuration file
+      -H = use hard-coded configuration only
+      -g = GnuPG home under which pubring.kbx and trustdb.gpg files are
+           expected to be found. This is the key ring to be refreshed
+           (conf option KEYRINGGNUPGHOME)
+      -w = wait upto given number of seconds before assuming the refresh
+           request to a PGP key server has failed (default is 180 seconds
+           and this is the allowed minimum wait time, conf option
+           MAX_WAIT_REFRESH_REQUEST_SECONDS)
+      -s = sleep given amount of seconds between refresh tries (default 180,
+           conf option WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS)
+      -r = sleep max random seconds between refresh tries (default 120,
+           conf option WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS)
+
+           NB: wait times given with options -s and -r are summed up.
+           These are intended to prevent swamping the pgp key servers
+           with requests.
+
+      -k = number of keys to refresh per refresh request (default 20,
+           conf option NUM_KEYS_TO_REFRESH_PER_REQUEST)
+      -f = max number of consecutively failed refreshes per key server
+           (default 10, conf option
+            MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER)
+      -h = this help
+
+    Commands:
+      showconf  - show configuration parameters and values used	
+      refresh   - refresh the key ring (requires either option -c or -H)
+      help      - this help (same as option h)
+
+    v. 0.0.1
+";
+}
+
+# We will eventually bump into an error (whilst this programme is run by
+# cron) that will spit out the single error message line below wrapped
+# into a cron alert message. Problem is, we can't completely avoid these
+# since errors may happen before necessary config info is available.
+sub outputmsg_and_exit {
+    my ($msg, $status) = @_;
+
+    if ($msg) {
+	$status ? print STDERR "$msg\n" : print "$msg\n";
+    }
+    exit($status);
+}
+
+sub dayshoursminssecs {
+    my $secs = shift;
+    my ($div, $rem);
+    my @units = ();
+    my ($ans);
+    
+    use integer;
+    for $div (60, 60, 24) {
+	$rem = $secs % $div;
+	$secs = $secs / $div;
+	unshift @units, $rem;
+    }
+
+    $ans = ($secs) ? "$secs days, " : "";
+    $ans .= sprintf("%0.2d:%0.2d:%0.2d", @units);
+    $ans;
+}
+
+sub ensure_we_have_aux_executables {
+    my $aux = shift;
+    for my $exe (values %{$aux}) {
+	return ("Required executable $exe is missing, install it or make PATH include it.", 22)
+	    if (! -x "$exe");
+    }
+    ("", 0);
+}
+
+sub read_config_file {
+    my ($conffilename, $allowedparams) = @_;
+    my ($line, $key, $value, $check);
+    my $confsection = undef;
+    my %configuration = ();
+    my @tempkeyservers = ();
+    my @tempskipkeys = ();
+    my $tempskipkeysdefined = 0;
+    my $fileloggerconf = "";
+
+    if (open(CFILE, "$conffilename")) {
+	do {
+	    # Read lines until we hit the first conf section or EOF
+	    $line = <CFILE>;
+	    chomp $line;
+	    if ($line =~ /^\]\[\]\s*(\w[\w\_\-\d]*)\s*\]\]\[\s*$/o) {
+		# change of conf section
+		$confsection = $1;
+	    }
+	} while (!defined $confsection and (defined $line));
+
+	if (!defined $confsection) {
+	    close(CFILE);
+	    return ("No configuration section defined in $conffilename", 23);
+	}
+
+	# We now have a $confsection defined
+	do {
+	    if ($confsection !~ /^(?:i_am_no_great_fan_of_ini_files|hmmm___some_key_servers_are_also_needed|skip_these_gpg_keys|and_logging_to_a_file_would_be_handy)$/o) {
+		close(CFILE);
+		return ("Unknown configuration section name $confsection", 24);
+	    }
+
+	    # Read lines until we hit a new conf section or EOF
+	    while ($line = <CFILE>) {
+		chomp $line;
+		if ($line =~ /^\]\[\]\s*(\w[\w\_\-\d]*)\s*\]\]\[\s*$/o) {
+		    # change of conf section
+		    $confsection = $1;
+		    last;
+		}
+
+		if ($confsection eq "i_am_no_great_fan_of_ini_files") {
+		    next if ($line =~ /^\s*(?:#.*)?$/go);
+		    if ($line =~ /^(\w[\w\d\-\_]*)=(.*)$/go) {
+			$configuration{$1} = $2;
+		    }
+		    else {
+			return ("Malformed configuration line $line in section $confsection", 25);
+		    }
+		}
+		elsif ($confsection eq "hmmm___some_key_servers_are_also_needed") {
+		    next if ($line =~ /^\s*(?:#.*)?$/go);
+		    if ($line =~ /^\s*(\w[\w\d\.\-]*)\s*$/go) {
+			push @tempkeyservers, $1;
+		    }
+		    else {
+			return ("Malformed pgp key server entry \"$line\" in section $confsection", 26);
+		    }
+		}
+		elsif ($confsection eq "skip_these_gpg_keys") {
+		    next if ($line =~ /^\s*(?:#.*)?$/go);
+		    if ($line =~ /^\s*(?:0x)?([a-f\d]{16})\s*$/io) {
+			push @tempskipkeys, $1;
+			$tempskipkeysdefined = 1;
+		    }
+		    else {
+			return ("Malformed key id skip entry \"$line\" in section $confsection", 27);
+		    }
+		}	    
+		elsif ($confsection eq "and_logging_to_a_file_would_be_handy") {
+		    $fileloggerconf .= "$line\n";
+		}
+		else {
+		    return ("We never get here! (hopefully)", 28);
+		}
+	    }
+	} while (defined $line);
+	close(CFILE);
+    }
+    else {
+	return("Unable to open conf file $conffilename.", 29);
+    }
+
+    # We override the hard-coded confs iff the config file defines them.
+    $configuration{'PRESKIPLIST'} = [ @tempskipkeys ] if ($tempskipkeysdefined);
+    $configuration{'KEYSERVERS'} = [ @tempkeyservers ] if (@tempkeyservers);
+    $configuration{'FILELOGGERCONF'} = $fileloggerconf if ($fileloggerconf ne "");
+    (\%configuration, 0);
+}
+
+sub check_configs {
+    my ($conf, $allowedparams) = @_;
+    my ($key, $value, $check);
+
+    # Check the conf values merged from conf file and hard-coded ones.
+    for $key (sort keys %{$conf}) {
+	return ("Unknown configuration parameter name $key.", 30) if (!exists ${$allowedparams}{$key});
+	# Run the given value through the checker to make sure it is as expected
+	$value = $conf->{$key};
+	$check = $allowedparams->{$key}->[1]($value);
+	return ("Conf parameter ${key}\'s value didn't pass the check, $check", 31) if ($check);
+    }
+
+    ("", 0);
+}
+
+sub show_configuration {
+    my ($c, $a, $m) = @_;
+    my $msg = "";
+    my ($key, $value);
+    my $cs = "hard-coded defaults";
+    my @confsources = ();
+    
+    unshift @confsources, $m->{'c'} if (defined $m->{'c'});
+    unshift @confsources, "command line" if (defined $m->{'cli_options_given'});
+    if (@confsources) {
+	$cs = (@confsources == 2) ?
+	    "$confsources[0], $confsources[1] and $cs" :
+	    "$confsources[0] and $cs";
+    }
+
+    print "From $cs:\n";
+    for $key (sort keys %{$c}) {
+	$value = $c->{$key};
+	if (ref($value) eq "ARRAY") {
+	    print "$key:\n";
+	    print "  $_\n" foreach (@{$value});
+	}
+	else {
+	    print "$key=$c->{$key}\n";
+	}
+    }
+    ("", 0);
+}
+
+sub update_key_ring {
+    my ($c, $a, $m) = @_;
+    my ($msg, $status);
+    my ($kib, $ksb, $krm, $keyid);
+    my @keychunk = ();
+    my %verifykeys = ();
+    my $remem = 0;
+    my $notfound;
+    my $server = "";
+    my @orderedservers = ();
+    my $tempringtopdir = "$c->{'TEMPKEYRINGTOPDIRSTEM'}.$$";
+    
+    my $logger = Log::Log4perl->get_logger("update");
+    
+    $logger->info("Starting $m->{'thecommand'} execution, ", scalar(localtime($m->{'starttimestamp'})));
+    
+    $krm = KeyRingManager->new($c->{'KEYRINGGNUPGHOME'},
+			       $tempringtopdir,
+			       $a->{'GPGCMD'},
+			       $a->{'CPCMD'});
+    ($msg, $status) = $krm->init();
+    goto CLEANUP_AND_QUIT if ($status);
+	
+    # Read in the keys that are valid and are thus subject to 
+    # updates of relevance, i.e. skip revoked and expired public
+    # keys and skip the ones on the preconfigured skip list.
+    
+    ($msg, $status) = $krm->getActiveKeyIds();
+    goto CLEANUP_AND_QUIT if ($status);
+	    
+    %verifykeys = map { ( $_ => 0 ); } @{$msg};
+	    
+    $remem = scalar(keys %verifykeys);
+    $notfound = 0;
+    # Removing the predefined keys to be skipped from verification
+    for $keyid (@{$c->{'PRESKIPLIST'}}) {
+	$keyid =~ s/^0x//o;
+	if (exists $verifykeys{$keyid}) {
+	    $logger->debug("(Pre)skipping key $keyid");
+	    delete $verifykeys{$keyid};
+	}
+	else {
+	    $logger->warn("Preskiplist contains key id $keyid that is not in the ring to be refreshed, remove it from the list.");
+	    $notfound++;
+	}
+    }
+    $logger->info("(Pre)skipping ", $remem - scalar(keys %verifykeys), " keys.");
+    $logger->info("(Pre)skipped keys _not_ present in the key ring being refreshed: $notfound keys.");
+    
+    foreach (keys %verifykeys) {
+	$logger->debug("Key to be refreshed $_");
+    }
+    $logger->info("Refreshing ", scalar(keys %verifykeys), " keys in key ring ",
+		  $krm->getMasterRingDir());
+    
+    $kib = KeyIdBookie->new([ keys %verifykeys ],
+			    scalar(@{$c->{'KEYSERVERS'}}),
+			    $c->{'NUM_KEYS_TO_REFRESH_PER_REQUEST'});
+    $ksb = KeyServerBookie->new($c->{'KEYSERVERS'},
+				$c->{'MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER'},
+				$c->{'MAX_WAIT_REFRESH_REQUEST_SECONDS'});
+    
+    while (keys %verifykeys) {
+	@orderedservers = $ksb->orderKeyServersBestFirst();
+	$server = undef;
+	foreach (@orderedservers) {
+	    $server = $_;
+	    @keychunk = $kib->getKeyChunkToRefresh($server->getName());
+	    last if (@keychunk); # the server may have info on some of the keys
+	}
+	last if (!@keychunk or (!defined $server)); # No server could offer info on keys
+	
+	$logger->debug("Selected ", $server->getName(), " for refresh attempt");
+	$logger->debug("Refreshing ", scalar(@keychunk), " key ids.");
+	($msg, $status) = $server->attemptKeyUpdate($a->{'GPGCMD'},
+						    "$tempringtopdir/workring",
+						    "$tempringtopdir/workring/gpg-refresh-run.output",
+						    @keychunk);
+	goto CLEANUP_AND_QUIT if ($status);
+	
+	# The gpg sub command output has been read by now.
+	$krm->deleteGPGRefreshRunFilesFromWorkRingDir();
+	
+	# Record whatever key info was found.
+	$kib->recordKeyInfo($server, @{$msg});
+	
+	if ($server->isWorkRingDirIntactAfterLastRefresh()) {
+	    # yes.
+	    if ($server->wasWorkRingDirUpdatedInLastRefresh()) {
+		($msg, $status) = $krm->updateMasterCopyFromWorkRing();
+		goto CLEANUP_AND_QUIT if ($status);
+	    }
+	}
+	else {
+	    # no. reinstate a new intact work ring from master copy
+	    ($msg, $status) = $krm->reinstateWorkRingFromMasterCopy();
+	    goto CLEANUP_AND_QUIT if ($status);
+	}
+
+	if ($kib->getKeyChunkToRefresh()) {
+	    # There are keys left to be searched for but we try to be nice
+	    # with the key servers
+	    my $st = int(rand($c->{'WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS'})) +
+		$c->{'WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS'};
+
+	    if ($st) {
+		$logger->debug("Being nice with key servers - sleeping $st seconds");
+		sleep $st;
+	    }
+	}
+    }
+    
+    # keys unchanged, updated, not found, num tries, success rate etc
+    $kib->stats();
+    # key server reliability, num requests, success rate etc
+    $ksb->stats();
+    $msg = undef;
+    
+  CLEANUP_AND_QUIT:
+    $logger->info($msg) if ($msg);
+
+    # Closing takes care of updates to the true master ring if necessary.
+    my ($msg2, $status2) = $krm->close();
+    $logger->info($msg2) if ($status2);
+
+    $logger->info("Finished $m->{'thecommand'} run, ", scalar(localtime()),
+		  " (status $status, duration ",
+		  &dayshoursminssecs(time() - $m->{'starttimestamp'}), ")");
+
+    # Mangling the return values
+    ($msg, $status) = ($status ? ($msg, $status) : ($msg2, $status2));
+    `$a->{'TTYCMD'} -s > /dev/null 2>&1`;
+    $status = 0 if ($? != 0);
+    ($msg, $status);
+}
+
+sub main () {
+    my %opts = ();
+    my $conffile;
+    my ($msg, $status);
+    my %aux = (
+	'GPGCMD' => '/usr/bin/gpg',
+	'CPCMD' => '/bin/cp',
+	'TTYCMD' => '/usr/bin/tty',
+	);
+
+    my %opttoconfmap = (
+	'g' => 'KEYRINGGNUPGHOME',
+	'w' => 'MAX_WAIT_REFRESH_REQUEST_SECONDS',
+	's' => 'WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS',
+	'r' => 'WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS',
+	'k' => 'NUM_KEYS_TO_REFRESH_PER_REQUEST',
+	'f' => 'MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER',
+	);
+
+    my %B = (
+	'KEYRINGGNUPGHOME' => [
+	    "$ENV{'HOME'}/.gnupg",
+	    sub {
+		return "$_[0] is not an absolute path name." if ($_[0] !~ m#^/#);
+		return "$_[0] cannot end in a / character." if ($_[0] =~ m#/$#);
+		return "$_[0] not a directory or it doesn't exist." if ((! -d "$_[0]") or (! -e "$_[0]"));
+		return "$_[0] is missing pubring.kbx and/or trustdb.gpg files." if ((! -r "$_[0]/pubring.kbx") or (! -r "$_[0]/trustdb.gpg"));
+		0;
+	    } ],
+	'TEMPKEYRINGTOPDIRSTEM' => [
+	    '/tmp/gpg-key-ring-refresher',
+	    sub {
+		return "$_[0] is not an absolute path name." if ($_[0] !~ m#^/#);
+		return "$_[0] cannot end in a / character." if ($_[0] =~ m#/$#);
+		0;
+	    } ],
+	# The fallback pgp key servers. These are used unless the config file
+	# states its own pgp key servers.
+	'KEYSERVERS' => [
+	    [
+ 	     'pgp.surfnet.nl',
+	     'pgp.circl.lu',
+	     'keys.openpgp.org',
+#	      'keys.gnupg.net',
+#	      'pgp.mit.edu',
+	     'pgp.key-server.io',
+	     'keyserver.ubuntu.com' ],
+	    sub {
+		my ($kn);
+		my @list;
+		return "Expecting list of key server names, got " . ref($_[0]) if (ref($_[0]) ne "ARRAY");
+		@list = @{$_[0]};
+		for $kn (@list) {
+		    return "Couldn't resolve key server $kn." if (!gethostbyname($kn));
+		}
+		0;
+	    } ],
+	'PRESKIPLIST' => [
+	    [ ],
+	    sub {
+		my @list = @{$_[0]};
+		return "Expecting list of hex key ids to skip, got " . ref($_[0]) if (ref($_[0]) ne "ARRAY");
+		for my $kid (@list) {
+		    return "Not a valid hex form key id (16 digit) $kid." if ($kid !~ /^(?:0x)?[a-f\d]{16}$/io);
+		}
+		0;
+	    } ],
+	'FILELOGGERCONF' => [
+"log4perl.rootLogger=INFO, LOGFILE
+log4perl.appender.LOGFILE=Log::Log4perl::Appender::File
+log4perl.appender.LOGFILE.filename=sub { \"$ENV{HOME}/.gpg-key-ring-refresher.log\"; }
+log4perl.appender.LOGFILE.mode=append
+log4perl.appender.LOGFILE.layout=PatternLayout
+log4perl.appender.LOGFILE.layout.ConversionPattern=%d{yyyy-MM-dd HH:mm:ss} [%p] - %m%n",
+	    sub {
+		my $prevhandler = $SIG{__WARN__};
+		local $SIG{__WARN__} = sub { };
+		Log::Log4perl->init(\$_[0]);
+		$SIG{__WARN__} = $prevhandler;
+		return "Not a log4perl conf: $_[0]."
+		    if (defined $Log::Log4perl::Config::CONFIG_INTEGRITY_ERROR);
+		0;
+	    } ],
+	'MAX_WAIT_REFRESH_REQUEST_SECONDS' => [
+	    180,
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS' => [
+	    180,
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS' => [
+	    120,
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'NUM_KEYS_TO_REFRESH_PER_REQUEST' => [
+	    20,
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER' => [
+	    10,
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	);
+
+    my %K = (
+	'showconf' => \&show_configuration,
+	'showconfig' => \&show_configuration,
+	'refresh' => \&update_key_ring,
+	'help' => undef, # Leave as undef, function usage already covers this.
+	);
+    my $command;
+    my ($option, $optname);
+    my $C = { map { $_ => $B{$_}[0] } keys %B };
+    my $NC;
+    my $prevhandler;
+    my $tempstr;
+
+    # We record the time stamp as early on as possible to count an as accurate
+    # duration as possible when a refresh is run.
+    $opts{'starttimestamp'} = time();
+
+    # A hack.
+    $command = $0;
+    $command =~ s#^(?:.*/)?([^/]+)$#$1#g;
+    $opts{'thecommand'} = $command;
+
+    # Sigh ... getopt doesn't provide any error msg when an option is missing
+    # its obligatory parameter ... but it returns 0.
+    $prevhandler = $SIG{__WARN__};
+    $SIG{__WARN__} = sub { };
+    if (!getopts('c:Hg:w:s:r:k:f:h',\%opts)) {
+	$SIG{__WARN__} = $prevhandler;
+	&outputmsg_and_exit("Unknown option or failed to parse options.", 32);
+    }
+    $SIG{__WARN__} = $prevhandler;
+    
+    &outputmsg_and_exit(&usage($opts{'thecommand'}), 0) if ($opts{'h'});
+
+    # We try to do this first thing so that we can initiate the logger
+    # (Log::Log4perl) as early on as possible.
+    if (defined $opts{'c'}) {
+	($NC, $status) = &read_config_file($opts{'c'}, \%B);
+	&outputmsg_and_exit($NC, $status) if ($status);
+	# copy new values from NC over to C, i.e. defs from conf file
+	# override hard-coded ones.
+	while (my ($key, $value) = each %{$NC}) {
+	    $C->{$key} = $value;
+	}
+    }
+
+    # Mapping some options (if given) to conf parameters.
+    while (($option,$optname) = each %opttoconfmap) {
+	if (defined $opts{$option}) {
+	    $C->{$optname} = $opts{$option};
+	    $opts{'cli_options_given'} = 1;
+	}
+    }
+    
+    # Now, check the overall config (i.e. possible conf file + hard-coded confs)
+    ($msg, $status) = &check_configs($C, \%B);
+    &outputmsg_and_exit($msg, $status) if ($status);
+
+    $tempstr = $C->{'FILELOGGERCONF'};
+    Log::Log4perl->init(\$tempstr);
+
+    # Were we given a valid command?
+    &outputmsg_and_exit("Wrong number of commands (" . scalar(@ARGV) . ").", 33)
+	if (@ARGV != 1);
+    
+    $command = $ARGV[0];
+    &outputmsg_and_exit("Unknown command $command given.", 34)
+	if (!exists $K{$command});
+
+    # Piggy-backing
+    $opts{'command'} = $command;
+
+    # help as a command
+    &outputmsg_and_exit(&usage($opts{'thecommand'}), 0) if ($command eq "help");
+
+    &outputmsg_and_exit("Either option -c or -H must be given for a refresh.", 35)
+	if (((!defined $opts{'c'}) and (!defined $opts{'H'})
+	     or ((defined $opts{'c'}) and (defined $opts{'H'})))
+	    and ($command eq "refresh"));
+
+    # Check here that auxiliary executables are available!
+    ($msg, $status) = &ensure_we_have_aux_executables(\%aux);
+    &outputmsg_and_exit($msg, $status) if ($status);
+    
+    # Run the desired operation
+    ($msg, $status) = &{$K{$command}}($C, \%aux, \%opts);
+
+    &outputmsg_and_exit($msg, $status);
+}
+
+&main;
+
+exit(0);
