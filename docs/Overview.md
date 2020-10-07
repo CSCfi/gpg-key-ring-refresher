@@ -1,9 +1,9 @@
 1. Installation
 ===============
 
-Install bin/gpg-key-ring-refresher e.g. under /usr/local/bin to
+Install `bin/gpg-key-ring-refresher` e.g. under `/usr/local/bin` to
 offer it to all users of the (Linux) host. For individual use only,
-$HOME/bin is fine.
+`$HOME/bin` is fine.
 
 Make sure the script has appropriate exec rights set.
 
@@ -15,18 +15,18 @@ Make sure the script has appropriate exec rights set.
 
 Unattended execution under cron is the recommended way to use the script.
 E.g. edit the appropriate crontab file to contain a line like:
-
+```
 15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh
-
+```
 or, if you are happy with the hard-coded defaults:
-
+```
 15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && /home/user/bin/gpg-key-ring-refresher -H refresh
-
+```
 The above examples run the refresher every Saturday morning at 2:15. Raising
 the frequency is not much point since PGP key servers then start to drop
 refresh requests or return no info to them.
 
-For the individual configuration parameters, see docs/Configuration.md
+For the individual configuration parameters, see docs/Configuration.md.
 
 4. Monitoring for or alerting on errors
 =======================================
@@ -37,9 +37,9 @@ Zabbix etc to check the log file gpg-key-ring-refresher
 writes. The last line of a refresh run in the log tells the status
 with which the run finished, e.g. your monitoring should at a minimum
 look for non-zero status values from those lines:
-
+```
 2020-09-19 04:54:15 [INFO] Finished gpg-key-ring-refresher run, Sat Sep 19 04:54:15 2020 (status 0, duration 02:39:14)
-
+```
 Alternatively, you may write a separate cron script that alerts you by e.g.
 email if such lines are found in the log.
 

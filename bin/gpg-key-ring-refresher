@@ -944,7 +944,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       refresh   - refresh the key ring (requires either option -c or -H)
       help      - this help (same as option h)
 
-    v. 0.0.1
+    v. 0.0.2
 ";
 }
 
