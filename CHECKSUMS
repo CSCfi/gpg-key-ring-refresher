@@ -1,0 +1,14 @@
+
+The SHA-256 file checksums of this release:
+
+0ce0356267b2682d17d052aec8d73e4011611b5ff83082a5f60d0633daf0edeb  ./docs/Configuration.md
+ece2faef442acc679bfe220b8132b42022eae5f9b800e68c04dde63eba8f8c5a  ./docs/Overview.md
+56becca8042e9e243f95e7a028a42061a434e95afdaf8acdffc6844e702921a8  ./CHANGELOG
+afd88032da9ce404db90ab6d08a8d8cf7ab90537b8cb90b4237c3d4b7c490438  ./bin/gpg-key-ring-refresher
+3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  ./LICENSE
+6b13789e43e5485634533de16a65d8ba9d34c4c9758588b665805435f80eb115  ./VERSION
+78b4ce24cef80309f6237d7cfc5fedfd9c81836fb5a679c2dff173ceeac4c040  ./README.md
+7c69879f23eca4f0198b7461eeeca8e571e9b16fb2b6f5c4c2dfb9ffbdc9394f  ./KNOWN_ISSUES
+
+PGP key id for verification: 0xF93BBD3EF28971EC.
+
