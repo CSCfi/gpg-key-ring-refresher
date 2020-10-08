@@ -1,5 +1,4 @@
-Configuration
-=============
+# Configuration
 
 The precedence of sources of configuration information is
 
@@ -9,11 +8,10 @@ The precedence of sources of configuration information is
 
 Hard-coded defaults act as fall-backs if no other source defines a
 configuration parameter. You may check them with
-
-    `gpg-key-ring-refresher showconf`
-
-1. Contents of the configuration file
--------------------------------------
+```
+    gpg-key-ring-refresher showconf
+```
+## 1. Contents of the configuration file
 
 The configuration file may define all or some of the following configuration
 sections:
@@ -26,8 +24,7 @@ sections:
 All lines in the configuration file ahead of the first section are ignored.
 The order of the sections is not relevant.
 
-1.1. Section `][] i_am_no_great_fan_of_ini_files ]][`
------------------------------------------------------
+### 1.1. Section `][] i_am_no_great_fan_of_ini_files ]][`
 
 This section is used for defining parameter value pairs, namely the
 following ones (defaults included):
@@ -52,8 +49,8 @@ a key server
 
 `NUM_KEYS_TO_REFRESH_PER_REQUEST=15`
 
-The stem of the temporary key ring directories under which the refresh
-operations are performed
+The stem of the temporary key ring directories under which info from
+the refreshes is stored
   
 `TEMPKEYRINGTOPDIRSTEM=/tmp/gpg-key-ring-refresher`
 
@@ -69,14 +66,12 @@ dropping your requests or not returning any data.
 
 `WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS=180`
 
-1.2. Section `][] hmmm___some_key_servers_are_also_needed  ]][`
----------------------------------------------------------------
+### 1.2. Section `][] hmmm___some_key_servers_are_also_needed  ]][`
 
 Here you can define the key servers that will be tried for key information.
 Define one key server per line.
 
-1.3. Section `][] skip_these_gpg_keys ]][`
-------------------------------------------
+### 1.3. Section `][] skip_these_gpg_keys ]][`
 
 A list (one per line) of PGP keys you don't want to be refreshed. A typical
 entry on this list is a key that hasn't been published on any key server.
@@ -85,8 +80,7 @@ The identifiers are expected to be 16 hex digits long, e.g.
 0x1111222233334444
 5555666677778888
 ```
-1.4. Section `][] and_logging_to_a_file_would_be_handy ]][`
------------------------------------------------------------
+### 1.4. Section `][] and_logging_to_a_file_would_be_handy ]][`
 
 This section defines the Log::Log4perl initialization parameters. All
 lines here get concatenated into the FILELOGGERCONF configuration

@@ -1,5 +1,4 @@
-1. Installation
-===============
+## 1. Installation
 
 Install `bin/gpg-key-ring-refresher` e.g. under `/usr/local/bin` to
 offer it to all users of the (Linux) host. For individual use only,
@@ -7,11 +6,7 @@ offer it to all users of the (Linux) host. For individual use only,
 
 Make sure the script has appropriate exec rights set.
 
-2. Options explained
-====================
-
-3. Configuration
-================
+## 2. Configuration
 
 Unattended execution under cron is the recommended way to use the script.
 E.g. edit the appropriate crontab file to contain a line like:
@@ -24,12 +19,11 @@ or, if you are happy with the hard-coded defaults:
 ```
 The above examples run the refresher every Saturday morning at 2:15. Raising
 the frequency is not much point since PGP key servers then start to drop
-refresh requests or return no info to them.
+refresh requests or return no info.
 
 For the individual configuration parameters, see docs/Configuration.md.
 
-4. Monitoring for or alerting on errors
-=======================================
+## 3. Monitoring for or alerting on errors
 
 Monitoring or alerting on errors is not supported by the
 script itself. Instead you may use some monitoring system, e.g. Icinga,
@@ -48,8 +42,7 @@ lines for hints as to what went wrong. You may also raise the
 verbosity of logging by setting the log level to ERROR or DEBUG if the
 aforementioned hints are not informative enough.
 
-5. Safeguards implemented
-=========================
+## 4. Safeguards implemented
 
 At startup gpg-key-ring-refresher attempts to create a pid file
 in the master key ring directory to be refreshed. If a pid file already exists,
@@ -68,7 +61,6 @@ refreshed info over the key ring files without losing the other
 changes. A following refresh run will correct the situation and
 (re)fetch the updated key information.
 
-6. Error codes
-==============
+## 5. Error codes
 
 ... some day some year maybe ... they should be quite self-explanatory though.

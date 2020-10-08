@@ -1,5 +1,10 @@
 2020-10-08  Mika Silander <mika.silander@csc.fi>
 
+	Third release. More markdownification. Markdown should be a standard
+	but apparently, everybody's implemented their own extensions to it.
+	
+2020-10-08  Mika Silander <mika.silander@csc.fi>
+
 	Second release. Markdownified the documentation.
 
 	First release.

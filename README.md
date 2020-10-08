@@ -24,7 +24,7 @@ keys ought to be added to the preskiplist to avoid costly polling of
 servers. Alternatively, ask the owners of those keys to upload
 them to well-known servers.
 
-By default, the script waits between key refresh connections in order
+By default, gpg-key-ring-refresher waits between key refresh connections in order
 to tread lightly with the key servers. These defaults can be adjusted
 in the configuration file or by using command line options if it seems
 key servers stop providing key info due to too frequent refresh
@@ -52,4 +52,7 @@ License
 GPLv3, see LICENSE file. For the required auxiliary software, see their
 corresponding licenses.
 
-Mika Silander 2020
+Copyright
+---------
+
+Mika Silander & CSC - IT Centre for Science Ltd, www.csc.fi, 2020
