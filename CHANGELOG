@@ -1,8 +1,14 @@
+2020-10-09  Mika Silander <mika.silander@csc.fi>
+
+	Fourth release. Improved wordings in documentation, added the
+	output of "gpg-key-ring-refresher -h" as a separate section
+	to docs/Overview.md. Upped the version number accordingly.
+
 2020-10-08  Mika Silander <mika.silander@csc.fi>
 
 	Third release. More markdownification. Markdown should be a standard
 	but apparently, everybody's implemented their own extensions to it.
-	
+
 2020-10-08  Mika Silander <mika.silander@csc.fi>
 
 	Second release. Markdownified the documentation.

@@ -22,12 +22,12 @@ sections:
 * `][] and_logging_to_a_file_would_be_handy ]][`
 
 All lines in the configuration file ahead of the first section are ignored.
-The order of the sections is not relevant.
+The order of the sections is irrelevant.
 
 ### 1.1. Section `][] i_am_no_great_fan_of_ini_files ]][`
 
-This section is used for defining parameter value pairs, namely the
-following ones (defaults included):
+This admittedly non-intuitively named section is used for defining
+some or all of the following parameter value pairs (defaults included):
 
 The master key ring that is to be refreshed
 
@@ -69,8 +69,11 @@ dropping your requests or not returning any data.
 ### 1.2. Section `][] hmmm___some_key_servers_are_also_needed  ]][`
 
 Here you can define the key servers that will be tried for key information.
-Define one key server per line.
-
+Define one key server per line. E.g.
+```
+pgp.circl.lu
+pgp.surfnet.nl
+```
 ### 1.3. Section `][] skip_these_gpg_keys ]][`
 
 A list (one per line) of PGP keys you don't want to be refreshed. A typical
@@ -89,7 +92,7 @@ initializer. E.g.
 ```
 log4perl.rootLogger=INFO, LOGFILE
 log4perl.appender.LOGFILE=Log::Log4perl::Appender::File
-log4perl.appender.LOGFILE.filename=sub { "/home/user/.gpg-key-ring-refresher.log"; }
+log4perl.appender.LOGFILE.filename=sub { "$ENV{HOME}/.gpg-key-ring-refresher.log"; }
 log4perl.appender.LOGFILE.mode=append
 log4perl.appender.LOGFILE.layout=PatternLayout
 log4perl.appender.LOGFILE.layout.ConversionPattern=%d{yyyy-MM-dd HH:mm:ss} [%p] - %m%n

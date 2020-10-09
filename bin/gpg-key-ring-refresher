@@ -907,9 +907,9 @@ sub usage() {
 "
 A programme for refreshing a GPG2 key ring against info from PGP key servers.
 
-    $thiscommand { -c conf_file_name | -H } [ -g gnupghomedir | -w seconds |
-		   -s seconds | -r max_seconds | -k number | -f number ]
-                  refresh
+    $thiscommand { -c conf_file_name | -H } [ -g gnupghomedir |
+		  -w seconds | -s seconds | -r max_seconds |
+		  -k number | -f number ] refresh
     $thiscommand -h
     $thiscommand { [ -c conf_file_name ] showconf | help }
 
@@ -944,7 +944,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       refresh   - refresh the key ring (requires either option -c or -H)
       help      - this help (same as option h)
 
-    v. 0.0.3
+    v. 0.0.4
 ";
 }
 
