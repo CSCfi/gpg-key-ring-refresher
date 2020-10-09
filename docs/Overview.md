@@ -50,7 +50,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       refresh   - refresh the key ring (requires either option -c or -H)
       help      - this help (same as option h)
 
-    v. 0.0.4
+    v. 0.0.5
 
 ```
 ## 3. Configuration
@@ -80,7 +80,8 @@ Assuming the logging level is set to INFO (or more detailed), then the last
 line of a gpg-key-ring-refresher run in the log tells the exit
 status of the run, e.g. your monitor should at a minimum
 look for non-zero status values from those lines:
-``` 2020-09-19 04:54:15 [INFO] Finished gpg-key-ring-refresher run, Sat Sep 19 04:54:15 2020 (status 0, duration 02:39:14)
+```
+2020-09-19 04:54:15 [INFO] Finished gpg-key-ring-refresher run, Sat Sep 19 04:54:15 2020 (status 0, duration 02:39:14)
 ```
 In case a non-zero status is encountered, check the preceding log
 entries for hints as to what went wrong. You may also raise the
