@@ -52,7 +52,12 @@ License
 GPLv3, see LICENSE file. For the required auxiliary software, see their
 corresponding licenses.
 
+Author
+------
+
+Mika Silander
+
 Copyright
 ---------
 
-Mika Silander & CSC - IT Centre for Science Ltd, www.csc.fi, 2020
+CSC - IT Centre for Science Ltd, www.csc.fi, 2020

@@ -61,7 +61,7 @@ The amount of seconds we wait between refresh attempts to key servers
 A maximum random amount of extra seconds we wait between refresh
 attempts to key servers. This is summed up with the earlier
 parameter. Be nice with the key servers and don't clog them with
-requests in rapid succession. If not, the key servers will end up
+requests in rapid succession, otherwise the key servers will end up
 dropping your requests or not returning any data.
 
 `WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS=180`
@@ -73,6 +73,7 @@ Define one key server per line. E.g.
 ```
 pgp.circl.lu
 pgp.surfnet.nl
+cool.forgedkeys.gov
 ```
 ### 1.3. Section `][] skip_these_gpg_keys ]][`
 
@@ -83,6 +84,8 @@ The identifiers are expected to be 16 hex digits long, e.g.
 0x1111222233334444
 5555666677778888
 ```
+Revoked and expired keys are filtered out dynamically before the refreshals
+begin.
 ### 1.4. Section `][] and_logging_to_a_file_would_be_handy ]][`
 
 This section defines the Log::Log4perl initialization parameters. All

@@ -50,7 +50,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       refresh   - refresh the key ring (requires either option -c or -H)
       help      - this help (same as option h)
 
-    v. 0.0.5
+    v. 0.0.6
 
 ```
 ## 3. Configuration
@@ -111,6 +111,6 @@ ring files without losing the other changes. Subsequent
 gpg-key-ring-refresher runs will however mend the
 situation as they eventually (re)fetch the same key information updates.
 
-## 6. Error codes
+## 6. Error messages and exit codes
 
 ... some day some year maybe ... they should be quite self-explanatory though.
