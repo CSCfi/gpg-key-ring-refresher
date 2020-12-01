@@ -1,12 +1,25 @@
 GPG key ring refresher
 ======================
 
-Refreshing key info of rings with numerous keys tends to suffer from
-refresh attempts left hanging and attempts being unanswered thus making a
-complete refresh impossible. This is mainly due to the load imposed
-on public key servers.
+This script shouldn't exist. But it does in an attempt to work around
+the following shortcomings of the plain gpg tools and in particular the
+refresh functionality:
 
-This script tries to autonomously refresh the key information in a
+ * gpg refresh connections to PGP key servers may hang indefinitely,
+ * PGP key servers may return no info on keys being refreshed, even
+   though they have info,
+ * gpg refresh and gpg-agent are not able to handle gracefully
+   PGP keys targeted by signature flooding attacks, see e.g.
+   * https://lwn.net/Articles/792366/ , or, 
+   * https://anarc.at/blog/2019-07-30-pgp-flooding-attacks/
+   * a long term solution to flooding attacks would be giving only the owner
+     of a key the authority to decide what signatures to the key if any
+     are published to PGP key servers. This could be achieved e.g. by the owner
+     signing and uploading the signatures received.
+   
+This script runs gpg refreshes under the hood and tries to make reasonable
+decisions as to what to do with the data gpg refresh returns (or decides not
+to return). It autonomously refreshes the key information in the
 given, arbitrary sized public key ring using a configured set of key
 servers as sources. It splits the key ring into smaller sets and
 attempts to refresh each set independently. It assumes the key ring
@@ -22,7 +35,12 @@ found or no more servers can be tried. Keys unknown to all servers are
 listed at the end of the refresh run (see the log file). These
 keys ought to be added to the preskiplist to avoid costly polling of
 servers. Alternatively, ask the owners of those keys to upload
-them to well-known servers.
+them to well-known servers. Likewise, the keys that have exceeded
+the number of signatures allowed are reported. The number of signature
+limits are controled by the global configuration parameters
+MAX_NUMBER_OF_SIGNATURES_PER_KEY and MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY.
+Key specific limits can be set in the configuration file's section
+`key_specific_signature_limits`.
 
 By default, gpg-key-ring-refresher waits between key refresh connections in order
 to tread lightly with the key servers. These defaults can be adjusted

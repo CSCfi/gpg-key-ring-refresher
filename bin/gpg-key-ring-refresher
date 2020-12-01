@@ -25,17 +25,57 @@ use POSIX ":sys_wait_h";
 use Log::Log4perl qw(get_logger);
 use Digest::MD5 qw(md5_hex md5_base64);
 
+
+package KeySignatureLimits;
+
+# A max_signatures set to zero means there are no limits, same applies
+# to max_signatures_on_refresh. Obviously something not to recommend.
+sub new {
+    my ($class, $id, $max_total, $max_refresh) = @_;
+
+    return undef if ($id !~ /^[a-f\d]{16}$/io);
+    return undef if ($max_total !~ /^\d+$/o);
+    return undef if ($max_refresh !~ /^\d+$/o);
+
+    my $self = {
+	'id' => uc($id),
+	'max_signatures' => $max_total,
+	'max_signatures_on_refresh' => $max_refresh
+    };
+
+    bless $self, $class;
+}
+
+sub getLimits {
+    ($_[0]->{'max_signatures'}, $_[0]->{'max_signatures_on_refresh'});
+}
+
+
 package Key;
+
+# All possible key statuses
+use constant {
+    NOT_SEARCHED_FOR => 0,
+    SEARCHED_FOR_BUT_NOT_FOUND => 1,
+    UNCHANGED => 2,
+    CHANGED_SIGN_LIMIT_NOT_EXCEEDED => 3,
+    CHANGED_SIGN_LIMIT_EXCEEDED => 4,
+    SIGN_LIMIT_EXCEEDED => 5,
+    ON_PRESKIPLIST => 6,
+    REVOKED => 7,
+    EXPIRED => 8
+};
 
 our $logger = Log::Log4perl::get_logger(__PACKAGE__);
 
 sub new {
-    my ($class, $id) = @_;
+    my ($class, $id, $num_signatures) = @_;
     my $self = {
 	'id' => $id,
-        'tried_keyservers' => {},
-        'status' => 0, # 0 = not searched for, 1 = searched for but not found,
-	               # 2 = not changed, 3 = changed
+	'tried_keyservers' => {},
+	'num_signatures' => $num_signatures || 0,
+	'max_new_signatures' => 0,
+        'status' => NOT_SEARCHED_FOR
     };
 
     bless $self, $class;
@@ -63,72 +103,109 @@ sub getTryCount {
     scalar(keys %{$_[0]->{'tried_keyservers'}});
 }
 
-# 0 = not searched for, 1 = searched for but not found,
-# 2 = not changed, 3 = changed
+# see constants above
 sub getStatus {
     $_[0]->{'status'};
 }
 
 sub setStatus {
     my ($self, $status) = @_;
-    $logger->fatal("Illegal key status $status") if ($status !~ /^[0-3]$/o);
+    $logger->fatal("Illegal key status $status") if ($status !~ /^[0-8]$/o);
     $self->{'status'} = $status;
 }
 
 sub eligible {
     my ($self, $servername) = @_;
-    return 1 if ($self->{'status'} == 0);
-    return 1 if (($self->{'status'} == 1) and
-		 (!exists ${$self->{'tried_keyservers'}}{'servername'}));
+    return 1 if ($self->{'status'} == NOT_SEARCHED_FOR);
+    return 1 if (($self->{'status'} == SEARCHED_FOR_BUT_NOT_FOUND) and
+		 (!exists ${$self->{'tried_keyservers'}}{$servername}));
     0;
+}
+
+sub getNumSignatures {
+    $_[0]->{'num_signatures'};
+}
+
+sub setMaxNewSignatures {
+    my ($self, $numnewsigs) = @_;
+    ${$self}{'max_new_signatures'} = $numnewsigs;
+}
+
+sub getMaxNewSignatures {
+    $_[0]->{'max_new_signatures'};
+}
+
+sub isNumNewSignaturesOk {
+    my ($self, $numsigs) = @_;
+
+    my $mns = $self->getMaxNewSignatures();
+    return 1 if ($numsigs <= $mns);
+    return 1 if ($mns == -1); # -1 means no limits on number of new sigs 
+    0;
+}
+
+sub addNewSignatures {
+    my ($self, $numsigs) = @_;
+    $self->{'num_signatures'} += $numsigs;
 }
 
 sub stats {
     my $self = shift;
     my ($servername, $hit, $msg);
 
+    # maps back to the Key::* constants
+    my @statusmap = (
+	"NOT_SEARCHED_FOR",
+	"NOT FOUND",
+	"UNCHANGED",
+	"CHANGED, SIGS OK",
+	"UNCHANGED, TOO MANY SIGS",
+	"SIGN LIMIT EXCEEDED",
+	"ON PRESKIPLIST",
+	"REVOKED",
+	"EXPIRED"
+	);
+
     $hit = undef;
-    if ($self->getStatus() >= 2) {
+    if ($self->getStatus() > SEARCHED_FOR_BUT_NOT_FOUND) {
 	while (($servername, $hit) = each %{$self->{'tried_keyservers'}}) {
 	    last if $hit;
 	}
     }
 
-    $msg = "Key $self->{'id'} (status $self->{'status'}/tries " .
-	$self->getTryCount() . (defined $hit ? "/source $servername)" : "/not found)");
+    $msg = " $self->{'id'}, sigs(" . $self->{'num_signatures'} .
+	") (" . lc($statusmap[$self->{'status'}]) . "/tries " .
+	$self->getTryCount() . (defined $hit ? "/source $servername)" : ")");
 
     $logger->is_warn() ? $logger->warn($msg) : $logger->info($msg);
 }
+
 
 package KeyIdBookie;
 
 our $logger = Log::Log4perl::get_logger(__PACKAGE__);
 
 sub new {
-    my ($class, $keyidentifiers, $max_retries, $chunksize) = @_;
+    my ($class, $keys, $max_retries, $chunksize) = @_;
     my $self;
-    my %KEYS = ();
-    
-    foreach (@{$keyidentifiers}) {
-	$KEYS{$_} = Key->new($_);
-    }
     
     $self = {
-	'not_found_keys' => \%KEYS,
+	'not_found_keys' => $keys,
 	'unchanged_keys' => {},
-	'changed_keys' => {},
-	'max_retries' => $max_retries, # set to number of key servers configured	    
+        'changed_keys_sigs_ok' => {},
+        'changed_keys_sigs_not_ok' => {},
+	'max_retries' => $max_retries, # set to number of key servers configured
         'chunksize' => $chunksize,
     };
     
     bless $self, $class;
 }
 
-# Return the max chunksize of the least fetched keys to be refreshed from
-# the given key server.
-sub getKeyChunkToRefresh {
-    my ($self, $servername) = @_;
+sub _getKeyChunkForServer {
+    my ($self, $server) = @_;
+    my $servername = $server->getName();
     my $nf = $self->{'not_found_keys'};
+
     my @bloodyexperimentalspliceonscalarforbidden =
 	sort _keytrycountcmp (grep { $_->getTryCount() < $self->{'max_retries'} } (grep { $_->eligible($servername) } values %{$nf}));
 
@@ -140,55 +217,63 @@ sub _keytrycountcmp {
     $a->getTryCount() <=> $b->getTryCount();
 }
 
+# Return max_chunksize of the least fetched keys to be refreshed from
+# the given key server.
+sub keyChunkToRefreshFromServer {
+    my ($self, @orderedServers) = @_;
+    my @keylist = ();
+    my $s;
+
+    for $s (@orderedServers) {
+	@keylist = $self->_getKeyChunkForServer($s);
+        return ( [ @keylist ], $s) if (@keylist);
+    }
+    ( [], undef );
+}
+
 sub recordKeyInfo {
-    my ($self, $server, $not_changed_r, $changed_r,
-	$not_found_due_to_refresh_failure_r, $refreshed_but_not_found_r) = @_;
+    my ($self, $server, $not_changed_r, $changed_sigs_ok_r,
+	$changed_sigs_not_ok_r, $not_found_due_to_refresh_failure_r,
+	$refreshed_but_not_found_r) = @_;
 
     $server = $server->getName();
     $self->addUnchangedKeys($server, $not_changed_r);
-    $self->addChangedKeys($server, $changed_r);
-    $self->notFoundKeysDueToFailure($server, $not_found_due_to_refresh_failure_r);
+    $self->addChangedKeysSigsOk($server, $changed_sigs_ok_r);
+    $self->addChangedKeysTooManySigs($server, $changed_sigs_not_ok_r);
+    # we simply ignore these: $not_found_due_to_refresh_failure_r
     $self->refreshedButNotFoundKeys($server, $refreshed_but_not_found_r);
 }
 
-sub addUnchangedKeys {
-    my ($self, $servername, $idlist) = @_;
+sub _categoriseKeys {
+    my ($self, $servername, $idlist, $targetkeylist) = @_;
     my ($key, $id);
     my $nf = $self->{'not_found_keys'};
-    my $u = $self->{'unchanged_keys'};
+    my $t = $self->{$targetkeylist};
 
     for $id (@{$idlist}) {
 	# store the server we found the key data from and
 	# move key to the unchanged ones
 	$key = $nf->{$id};
 	$key->addSourceKeyServer($servername);
-	$key->setStatus(2);
-	$u->{$id} = $key;
+	$t->{$id} = $key;
 	# remove from not found key ids
 	delete $nf->{$id};
     }
 }
 
-sub addChangedKeys {
+sub addUnchangedKeys {
     my ($self, $servername, $idlist) = @_;
-    my ($key, $id);
-    my $nf = $self->{'not_found_keys'};
-    my $c = $self->{'changed_keys'};
-
-    for $id (@{$idlist}) {
-	# store the server we found the key data from and
-	# move key to the changed ones
-	$key = $nf->{$id};
-	$key->addSourceKeyServer($servername);
-	$key->setStatus(3);
-	$c->{$id} = $key; 
-	# remove from not found key ids
-	delete $nf->{$id};
-    }
+    $self->_categoriseKeys($servername, $idlist, 'unchanged_keys');
 }
 
-sub notFoundKeysDueToFailure {
-    # no op
+sub addChangedKeysSigsOk {
+    my ($self, $servername, $idlist) = @_;
+    $self->_categoriseKeys($servername, $idlist, 'changed_keys_sigs_ok');
+}
+
+sub addChangedKeysTooManySigs {
+    my ($self, $servername, $idlist) = @_;
+    $self->_categoriseKeys($servername, $idlist, 'changed_keys_sigs_not_ok');
 }
 
 sub refreshedButNotFoundKeys {
@@ -200,37 +285,41 @@ sub refreshedButNotFoundKeys {
 	# We remember the server that was unable to provide info on this key.
 	$key = $nf->{$id};
 	$key->addTriedKeyServer($servername);
-	$key->setStatus(1);
+	$key->setStatus(Key::SEARCHED_FOR_BUT_NOT_FOUND);
     }
 }
 
 sub stats {
     my $self = shift;
-    my @nf = ();
+    my ($s, $numkeys, $id, $m);
+    my @o = ();
     
-    for my $s ('unchanged_keys', 'changed_keys') {
-	$logger->info("Number of ", join(" ", split("_", $s)), " : ",
-		      scalar(keys %{$self->{$s}}));
-	if ($logger->is_debug()) {
-	    for my $k (values %{$self->{$s}}) {
-		$k->stats();
+    for $s ( ['unchanged keys', 'unchanged_keys', undef ],
+	     ['changed keys adhering to signature limits', 'changed_keys_sigs_ok', undef ],
+	     ['changed keys exceeding signature limits', 'changed_keys_sigs_not_ok',
+	      [ "Adjust global key signature limits,",
+		"set key specific signature limits, or,",
+		"move the key to the preskip list:" ]
+	     ],
+	     ['keys not found', 'not_found_keys',
+	      [ "Add keys not found to the preskip list,",
+		"ask their owners to upload them, or, configure",
+		"new key servers that can provide info about them:" ]
+	     ] ) {
+	@o =(@{$s});
+	$numkeys = keys %{$self->{$o[1]}};
+	$logger->info("Number of $o[0] : $numkeys");
+	next if (!$numkeys);
+
+	if ($logger->is_debug() or (defined $o[2])) {
+	    foreach $m (@{$o[2]}) { $logger->warn(" $m"); }
+	    foreach $id (sort keys %{$self->{$o[1]}}) {
+		$self->{$o[1]}->{$id}->stats();
 	    }
 	}
     }
-
-    @nf = values %{$self->{'not_found_keys'}}; 
-    if (!@nf) {
-	$logger->info("Number of keys not found : 0");
-	return;
-    }
-
-    $logger->warn("Number of keys not found : ", scalar(@nf));
-    $logger->warn("Add keys not found to the preskiplist, ask their owners to upload them,");
-    $logger->warn("or, configure new key servers that can provide info about them.");
-    foreach (@nf) {
-	$_->stats();
-    }
 }
+
 
 package KeyServer;
 
@@ -281,7 +370,6 @@ sub attemptKeyUpdate {
     my ($pid, $starttime, $sleeptime);
     my ($status, $iwaited);
     my $maxwaitsecs = $self->{'max_refresh_wait_secs'};
-    my $refresh_attempt_was_killed;
     my $keyinfo;
     my ($killcount, $killrounds);
     
@@ -315,19 +403,17 @@ sub attemptKeyUpdate {
 	    $iwaited = 1;
 	}
 
-	$refresh_attempt_was_killed = 0;
+	$self->{'last_refresh_attempt_killed'} = 0;
 	if ((time() - $starttime >= $maxwaitsecs) or ($status != -1 and $iwaited)) {
             $killrounds = 0;
             do {
 		$killcount = kill 'KILL', $pid;
             } while (!$killcount and $killrounds++ < 4);
             $status = waitpid $pid, 'WNOHANG';
-            $logger->debug("After kill attempt waitpid $pid gave $status");
-	    $refresh_attempt_was_killed = 1;
+            $self->{'last_refresh_attempt_killed'} = 1;
 	    if (!$status) {
 		# update counters even in the case of a complete failure
-		$self->_updateKeyServerState($refresh_attempt_was_killed,
-					     [], [], [ @keys ], []);
+		$self->_updateKeyServerState([], [], [], [ @keys ], []);
 		$logger->fatal("Failed to kill gpg key refresh process (status $status)");
 		return ("", 6);
 	    }
@@ -337,15 +423,16 @@ sub attemptKeyUpdate {
 	}
 	
 	$logger->debug("Refresh subprocess ",
-		       $refresh_attempt_was_killed ? "was killed" : "terminated normally");
-	$self->{'last_refresh_attempt_was_killed'} = $refresh_attempt_was_killed;
+		       $self->{'last_refresh_attempt_killed'} ? "was killed" : "terminated normally");
 	($keyinfo, $status) = $self->_analyseKeyRefreshInfo($gpgrefreshoutputfile, @keys);
 
 	if ($logger->is_debug()) {
 	    my $i = 0;
 	    my @tki = @{$keyinfo};
 	    my $sname = $self->{'name'};
-	    for my $type ('Not changed', 'Updated', 'No info given', 'Not known') {
+	    for my $type ('Not changed', 'Changed sigs ok',
+			  'Changed but sig limit exceeded',
+			  'No info given', 'Not seen') {
 		if (!@{$tki[$i]}) {
 		    $logger->debug("$type : 0 keys");
 		}
@@ -361,10 +448,10 @@ sub attemptKeyUpdate {
 	return ($keyinfo, $status) if ($status);
 
 	# Update the key server's internal counters
-	$self->_updateKeyServerState($refresh_attempt_was_killed, @{$keyinfo});
+	$self->_updateKeyServerState(@{$keyinfo});
 
-	if ($refresh_attempt_was_killed) {
-	    return ([$keyinfo->[0], [], $keyinfo->[2], []], 0);
+	if ($self->{'last_refresh_attempt_killed'}) {
+	    return ([$keyinfo->[0], [], $keyinfo->[2], $keyinfo->[3], []], 0);
 	}
 	else {
 	    # Refresh attempt terminated successfully, return the key info found.
@@ -408,58 +495,95 @@ sub attemptKeyUpdate {
 sub _analyseKeyRefreshInfo {
     my ($self, $gpgrefreshoutputfile, @keys) = @_;
     my %notchanged = ();
-    my %changed = ();
-    my ($line, $keyid, $keyinfo);
+    my %changedsigsok = ();
+    my %changedsigsnotok = ();
+    my ($line, $prev, $curr, $x, $keyinfo);
 
-    my %allkeys = ( map { $_->getId() => 0 } @keys );
- 
+    my %allkeys = ( map { ($_->getId() => $_ ); } @keys );
+    my %allids = ( map { ( $_->getId() => 0 ); } @keys );
+
+    $curr = undef;
     if (open(REFRFH, "$gpgrefreshoutputfile")) {
 	while ($line = <REFRFH>) {
 	    if ($line =~ /^gpg:\skey\s(?:0x)?([a-fA-F\d]{16})\:\s\"[^\"]+\"\s(.+)\s*$/o) {
 		# we hit an info line
-		$keyid = $1;
-		$keyinfo = $2;
-		if ($keyinfo =~ /not changed/o) {
-#		    $logger->debug("Not changed : $keyid");
-		    $notchanged{$keyid} = 1;
+		$curr = $1;
+		if ($curr ne $prev) {
+		    $x = $allkeys{$curr};
+		    delete $allids{$prev} if (defined $prev);
+		    $prev = $curr;
 		}
-		elsif ($keyinfo =~ /^.*(?:\d+\snew\ssignatures?|\d+\snew\ssubkeys?|revocation\scertificates?\sadded|\d+\snew\suser\sIDs?)$/o) {
-#		    $logger->debug("Updated : $keyid");
-		    $changed{$keyid} = 1;
+		$keyinfo = $2;
+		if ($keyinfo =~ /^(\d+)\snew\ssignatures?$/o) {
+		    if ($x->isNumNewSignaturesOk($1)) {
+			$changedsigsok{$curr} = 1;
+			delete $notchanged{$curr};
+			$x->setStatus(Key::CHANGED_SIGN_LIMIT_NOT_EXCEEDED);
+		    }
+		    else {
+			$changedsigsnotok{$curr} = 1;
+			delete $changedsigsok{$curr};
+			delete $notchanged{$curr};
+			$x->setStatus(Key::CHANGED_SIGN_LIMIT_EXCEEDED);
+			$self->{'last_refresh_attempt_killed'} = 1;
+		    }
+		    $x->addNewSignatures($1);
+		    next;
+		}
+		elsif ($keyinfo =~ /^.*(?:\d+\snew\ssubkeys?|revocation\scertificates?\sadded|\d+\snew\suser\sIDs?)$/o) {
+		    if ($x->getStatus() < Key::UNCHANGED) {
+			$changedsigsok{$curr} = 1;
+			delete $notchanged{$curr};
+			$x->setStatus(Key::CHANGED_SIGN_LIMIT_NOT_EXCEEDED);
+		    }
+		    $prev = $curr;
+		    next;
+		}
+		elsif ($keyinfo =~ /not changed/o) {
+		    if ($x->getStatus() < Key::UNCHANGED) {
+			$notchanged{$curr} = 1;
+			$x->setStatus(Key::UNCHANGED);
+		    }
+		    $prev = $curr;
 		}
 		else {
-		    $logger->fatal("Found a new refresh response type :$keyinfo: for $keyid");
+		    $logger->fatal("Found a new refresh response type :$keyinfo: for $curr");
 		    return ("", 9);
 		}
-		delete $allkeys{$keyid};
 	    }
 	}
 	close(REFRFH);
+	delete $allids{$curr} if (defined $curr);
 
 	if ($self->{'last_refresh_attempt_killed'}) {
-	    return ([ [ keys %notchanged ], [ keys %changed ],
-		      [ keys %allkeys ], [ ] ], 0);
+	    return ([ [ keys %notchanged ],
+		      [ ],
+		      [ keys %changedsigsnotok ],
+		      [ keys %allids ], [ ] ], 0);
 	}
 	else {
-	    return ([ [ keys %notchanged ], [ keys %changed ],
-		      [ ], [ keys %allkeys ] ], 0);
+	    return ([ [ keys %notchanged ],
+		      [ keys %changedsigsok ],
+		      [ ],
+		      [ ], [ keys %allids ] ], 0);
 	}
     }
     ("Failed to open $gpgrefreshoutputfile", 10);
 }
 
 sub _updateKeyServerState {
-    my ($self, $last_refresh_attempt_killed,
-	$not_changed_r, $changed_r, $not_found_r,
+    my ($self, $not_changed_r, $changed_sigs_ok_r,
+	$changed_sigs_not_ok_r,
+	$not_found_r,
 	$searched_for_but_not_found_r) = @_;
 
-    my @notchanged = @{$not_changed_r};
-    my @changed = @{$changed_r};
+    my @notchanged = (@{$not_changed_r}, @{$changed_sigs_not_ok_r});
+    my @changed = @{$changed_sigs_ok_r};
     my @notfound = (@{$not_found_r}, @{$searched_for_but_not_found_r});
 
     # We record this for knowing if, when and how we can update the
     # master copy (intact) and working key rings.
-    if ($self->{'last_refresh_attempt_killed'} = $last_refresh_attempt_killed) {
+    if ($self->{'last_refresh_attempt_killed'}) {
 	if ((!@notfound) and (!@changed)) {
 	    # all keys refreshed had no changes - success
 	    $self->{'num_requests_successful'} += 1;
@@ -532,6 +656,7 @@ sub stats {
 	($self->eligible() ? "responding" : "unresponsive"));
 }
 
+		
 package KeyServerBookie;
 
 our $logger = Log::Log4perl::get_logger(__PACKAGE__);
@@ -574,6 +699,7 @@ sub stats {
     }
 }
 
+
 package KeyRingManager;
 
 use Fcntl qw(:DEFAULT :flock);
@@ -583,19 +709,40 @@ our $logger = Log::Log4perl::get_logger(__PACKAGE__);
 # Store the name of the master GNUPGHOME directory that is going to be
 # updated.
 sub new {
-    my ($class, $masterdir, $temptopdir, $gpgexec, $copyexec) = @_;
+    my ($class, $masterdir, $temptopdir, $preskips, $signlimits,
+	$global_max_sigs_per_key,
+	$global_max_new_sigs_per_key,
+	$gpgexec, $copyexec) = @_;
+
+    # We cheat here by turning key identifiers into KeySignatureLimits
+    # objects. After keys are skipped, the limits can be forgotten.
+    my %preskipkeysfromlist = map { ($_ => KeySignatureLimits->new($_, 0, 0)) }
+       @{$preskips};
+    my %signlimitsfromlist = map { (${$_}[0] => KeySignatureLimits->new(@{$_})) } map { [ split(" ",$_) ] } @{$signlimits};
+    
     my $self = {
 	'masterringdir' => $masterdir,
         'temptopdir' => $temptopdir,
         'mastercopydir' => "$temptopdir/mastercopy",
         'workringdir' => "$temptopdir/workring",
+	'confdpreskiplist' => \%preskipkeysfromlist,
+	'signaturelimits' => \%signlimitsfromlist,
+	'global_max_sigs' => $global_max_sigs_per_key,
+	'global_max_new_sigs' => $global_max_new_sigs_per_key,
 	'gpgexecutable' => $gpgexec,
 	'copyexecutable' => $copyexec,
         'files_to_manage' => { 'pubring.kbx' => undef,
 			       'trustdb.gpg' => undef },
         'pidfilehandle' => undef,
         'skip_tempdir_deletion' => 0,
-	'successfulupdates' => 0
+	'successfulupdates' => 0,
+	'active_keys' => {},
+	'preskipped_keys' => {},
+	'revoked_keys' => {},
+	'expired_keys' => {},
+        'signatures_exceeded_keys' => {},
+	'processed_sign_limits' => {},
+	'total_num_key_ids' => 0
     };
 
     bless $self, $class;
@@ -610,6 +757,20 @@ sub init {
     my $path = "";
     my @fullpath = ();
     my ($pidfh, $inode, $pid, $in, $pidfound, $filename, $mfh);
+
+    my ($nowepoch, $line, $key, $keyid, $prevkeyid, $numsigs,
+	$keyexpiryepoch, $keyrevokepoch, $kstatus);
+
+    my @allkeys = ();
+    my %activekeys = ();
+    my %preskippedkeys = ();
+    my %expiredkeys = ();
+    my %revokedkeys = ();
+    my %signaturesexceededkeys = ();
+    my %processedsignlimits = ();
+
+    my ($confdpreskips, $signlimits, $curr_sigs, $max_sigs, $max_new_sigs, $num,
+	$global_max, $global_max_new);
 
     if (! -d $self->{'masterringdir'}) {
 	$logger->fatal("Master ring $self->{'masterringdir'} doesn't exist");
@@ -714,23 +875,150 @@ sub init {
     # Setting up the mastercopy and workring gnupg dirs.
     $self->_copyring($self->{'masterringdir'}, $self->{'mastercopydir'});
     $self->_copyring($self->{'mastercopydir'}, $self->{'workringdir'});
-    ("", 0);
-}
 
-sub getActiveKeyIds {
-    my $self = shift;
-    my $allpubkeysinmasterring = `$self->{'gpgexecutable'} --homedir $self->{'mastercopydir'} --batch --no-tty --keyid-format=long --list-keys 2> /dev/null`;
+    # Here we read in all the keys and count their signatures.
+    # timestamp now as seconds after epoch
+    $nowepoch = time();
+    $key = $keyid = $keyexpiryepoch = $keyrevokepoch = 0;
 
-    if ($? != 0) {
-	$logger->fatal("Failed to list public keys from $self->{'mastercopydir'}");
-	return ("", 16);
+    if (open(PUBKEYSFH, "$self->{'gpgexecutable'} --homedir $self->{'mastercopydir'} --batch --no-tty --keyid-format=long --with-colons --list-sigs 2>&1 |")) {
+	# Read lines until we hit the pub key entry (or EOF)
+	while ($line = <PUBKEYSFH>) {
+	    chomp $line;
+	    if ($line =~ /^pub:[^:]*:[^:]*:[^:]*:([A-F\d]{16}):[^:]*:(\d*):/o) {
+		# found first key
+		$keyid = $1;
+		$keyexpiryepoch = $2 || 0;
+		$keyrevokepoch = 0;
+		last;
+	    }
+	}
+
+	if (defined $keyid) {
+	    $prevkeyid = $keyid; # handling the case of a one key only key ring
+	    # We now have at least one public key
+	    $numsigs = 0;
+	    while ($line = <PUBKEYSFH>) {
+	        if ($line =~ /^sig:/o) {
+		    $numsigs++;
+		    next;
+		}
+		if ($line =~ /^pub:[^:]*:[^:]*:[^:]*:([A-F\d]{16}):[^:]*:(\d*):/o) {
+		    # found next key, let's store the previous one
+		    $key = Key->new($keyid, $numsigs);
+		    $key->setStatus(Key::EXPIRED) if ($keyexpiryepoch and ($keyexpiryepoch < $nowepoch));
+		    $key->setStatus(Key::REVOKED) if ($keyrevokepoch);
+		    push @allkeys, $key;
+		    # next key
+		    $keyid = $1;
+		    $keyexpiryepoch = $2 || 0;
+		    $keyrevokepoch = 0;
+		    $numsigs = 0;
+		    next;
+		}
+		if ($line =~ /^rev:[^:]*:[^:]*:[^:]*:[^:]*:(\d+):/o) {
+		    $keyrevokepoch = $1;
+		}
+	    }
+	}
+	close(PUBKEYSFH);
+
+	# Save last key data here if you have one!
+	if (defined $keyid and ($keyid ne $prevkeyid)) {
+	    $key = Key->new($keyid, $numsigs);
+	    $key->setStatus(Key::EXPIRED) if ($keyexpiryepoch and ($keyexpiryepoch < $nowepoch));
+	    $key->setStatus(Key::REVOKED) if ($keyrevokepoch);
+	    push @allkeys, $key;
+	}
+	
+	# We order the keys to different subsets
+	$confdpreskips = $self->{'confdpreskiplist'};
+	$signlimits = $self->{'signaturelimits'};
+	$global_max = $self->{'global_max_sigs'};
+	$global_max_new = $self->{'global_max_new_sigs'};
+	foreach $key (@allkeys) {
+	    $kstatus = $key->getStatus();
+	    $keyid = $key->getId();
+	    if (exists $confdpreskips->{$keyid}) {
+		# remove the key from the configured preskiplist
+		delete ${$confdpreskips}{$keyid};
+		# put the key to the preskiplist
+		$key->setStatus(Key::ON_PRESKIPLIST);
+		$preskippedkeys{$keyid} = $key;
+		next;
+	    }
+	    if ($kstatus == Key::NOT_SEARCHED_FOR) {
+		# count the keywise signature limits here
+		$curr_sigs = $key->getNumSignatures();
+		($max_sigs, $max_new_sigs) =
+		    (exists ${$signlimits}{$keyid} ?
+		     $signlimits->{$keyid}->getLimits() :
+		     ($global_max, $global_max_new));
+		$num = ($max_sigs > $curr_sigs ? $max_sigs - $curr_sigs : 0);
+		$num = (($max_new_sigs < $num and $max_new_sigs > 0) ? $max_new_sigs : $num);
+		$num = $max_new_sigs if ($max_sigs == 0);
+		$num = -1 if ($max_sigs <= 0 and $max_new_sigs <= 0);
+		$key->setMaxNewSignatures($num);
+		if ($num == 0) {
+		    $key->setStatus(Key::SIGN_LIMIT_EXCEEDED);
+		    $signaturesexceededkeys{$keyid} = $key;
+		}
+		else {
+		    $activekeys{$keyid} = $key;
+		}
+		# We move the KeySignatureLimits info to the processed ones
+		# after it has been handled.
+		if (exists ${$signlimits}{$keyid}) {
+		    $processedsignlimits{$keyid} = ${$signlimits}{$keyid};
+		    delete ${$signlimits}{$keyid};
+		}
+		next;
+	    }
+	    if ($kstatus == Key::EXPIRED) {
+		$expiredkeys{$keyid} = $key;
+		next;
+	    }
+	    if ($kstatus == Key::REVOKED) {
+		$revokedkeys{$keyid} = $key;
+		next;
+	    }
+
+	    $logger->fatal("We should never land here!");
+	}
     }
 
-    ([map { $_ =~ m#^pub\s+[^/]+/(\S+)\s#; $1; }
-      grep !/\[(?:revoked|expired):\s/o,
-      (grep /^pub\s.*/o, split(/\n/, $allpubkeysinmasterring))], 0);
+    # Store the different key sets here for later reference
+    $num = 0;
+    for my $e ( [ 'active_keys', \%activekeys ],
+		[ 'preskipped_keys', \%preskippedkeys ],
+		[ 'signatures_exceeded_keys', \%signaturesexceededkeys ],
+		[ 'processed_sign_limits', \%processedsignlimits ],
+		[ 'expired_keys', \%expiredkeys ],
+		[ 'revoked_keys', \%revokedkeys ] ) {
+	my @o =(@{$e});
+	${$self}{$o[0]} = $o[1]; # store the keys for later reference
+	my $temp = scalar(keys %{$o[1]});
+	$num += $temp; # counting totals
+    }
+    $num += (keys %{$self->{'confdpreskiplist'}}) +
+      (keys %{$self->{'signaturelimits'}}) -
+      (keys %processedsignlimits); # let's subtract the anomaly introduced
+                                   # above.
+    ${$self}{'total_num_key_ids'} = $num;
+    $logger->info("Total number of unique key identifiers is $num");
+    ("", 0);
+}
+    
+sub getKeys {
+    my ($self, $keytype) = @_;
+
+    $self->{$keytype};
 }
 
+sub numAllKeys {
+    $_[0]->{'total_num_key_ids'};
+}
+      
 sub getMasterRingDir {
     $_[0]->{'masterringdir'};
 }
@@ -913,7 +1201,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
 		  -w seconds | -s seconds | -r max_seconds |
 		  -k number | -f number ] refresh
     $thiscommand -h
-    $thiscommand { [ -c conf_file_name ] showconf | help }
+    $thiscommand { [ -c conf_file_name ] showconf | siginfo | help }
 
     Options:
       -c = use given configuration file
@@ -944,9 +1232,10 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
     Commands:
       showconf  - show configuration parameters and values used	
       refresh   - refresh the key ring (requires either option -c or -H)
+      siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.0.6
+    v. 0.1.0
 ";
 }
 
@@ -997,7 +1286,7 @@ sub read_config_file {
     my %configuration = ();
     my @tempkeyservers = ();
     my @tempskipkeys = ();
-    my $tempskipkeysdefined = 0;
+    my @signaturelimits = ();
     my $fileloggerconf = "";
 
     if (open(CFILE, "$conffilename")) {
@@ -1018,7 +1307,7 @@ sub read_config_file {
 
 	# We now have a $confsection defined
 	do {
-	    if ($confsection !~ /^(?:i_am_no_great_fan_of_ini_files|hmmm___some_key_servers_are_also_needed|skip_these_gpg_keys|and_logging_to_a_file_would_be_handy)$/o) {
+	    if ($confsection !~ /^(?:i_am_no_great_fan_of_ini_files|hmmm___some_key_servers_are_also_needed|skip_these_gpg_keys|and_logging_to_a_file_would_be_handy|key_specific_signature_limits)$/o) {
 		close(CFILE);
 		return ("Unknown configuration section name $confsection", 24);
 	    }
@@ -1053,13 +1342,21 @@ sub read_config_file {
 		elsif ($confsection eq "skip_these_gpg_keys") {
 		    next if ($line =~ /^\s*(?:#.*)?$/go);
 		    if ($line =~ /^\s*(?:0x)?([a-f\d]{16})\s*$/io) {
-			push @tempskipkeys, $1;
-			$tempskipkeysdefined = 1;
+			push @tempskipkeys, uc($1);
 		    }
 		    else {
-			return ("Malformed key id skip entry \"$line\" in section $confsection", 27);
+			return ("Malformed key skip entry \"$line\" in section $confsection", 27);
 		    }
 		}	    
+		elsif ($confsection eq "key_specific_signature_limits") {
+		    next if ($line =~ /^\s*(?:#.*)?$/go);
+		    if ($line =~ /^\s*(?:0x)?([a-f\d]{16})\s+(\d+)\s+(\d+)\s*$/io) {
+			push @signaturelimits, uc($1) . " $2 $3";
+		    }
+		    else {
+			return ("Malformed signature limit entry \"$line\" in section $confsection", 27);
+		    }
+		}
 		elsif ($confsection eq "and_logging_to_a_file_would_be_handy") {
 		    $fileloggerconf .= "$line\n";
 		}
@@ -1075,9 +1372,10 @@ sub read_config_file {
     }
 
     # We override the hard-coded confs iff the config file defines them.
-    $configuration{'PRESKIPLIST'} = [ @tempskipkeys ] if ($tempskipkeysdefined);
-    $configuration{'KEYSERVERS'} = [ @tempkeyservers ] if (@tempkeyservers);
+    $configuration{'PRESKIPLIST'} = \@tempskipkeys if (@tempskipkeys);
+    $configuration{'KEYSERVERS'} = \@tempkeyservers if (@tempkeyservers);
     $configuration{'FILELOGGERCONF'} = $fileloggerconf if ($fileloggerconf ne "");
+    $configuration{'KEY_SPECIFIC_SIGNATURE_LIMITS'} = \@signaturelimits if (@signaturelimits);
     (\%configuration, 0);
 }
 
@@ -1097,6 +1395,26 @@ sub check_configs {
     ("", 0);
 }
 
+sub _confprint {
+    my ($key, $value, $indent) = @_;
+
+    if (ref($value) eq "ARRAY") {
+	print " " x $indent, "$key:\n";
+	$indent++;
+        foreach (@{$value}) { &_confprint(undef, $_, $indent); }
+    }
+    elsif (ref($value) eq "HASH") {
+	print " " x $indent, "$key:\n";
+	$indent++;
+	while(my ($k,$v) = each %{$value}) {
+	    &_confprint($k, $v, $indent);
+	}
+    }
+    else {
+	print " " x $indent, ($key ? "$key=$value\n" : "$value\n");
+    }
+}
+    
 sub show_configuration {
     my ($c, $a, $m) = @_;
     my $msg = "";
@@ -1115,25 +1433,65 @@ sub show_configuration {
     print "From $cs:\n";
     for $key (sort keys %{$c}) {
 	$value = $c->{$key};
-	if (ref($value) eq "ARRAY") {
-	    print "$key:\n";
-	    print "  $_\n" foreach (@{$value});
-	}
-	else {
-	    print "$key=$c->{$key}\n";
-	}
+	&_confprint($key, $value, 0);
     }
     ("", 0);
 }
 
+sub show_sign_info {
+    my ($c, $a, $m) = @_;
+    my ($msg, $status);
+    my ($kib, $ksb, $krm, $keyid);
+    my $tempringtopdir = "$c->{'TEMPKEYRINGTOPDIRSTEM'}.$$";
+    my $mns;
+    
+    my $logger = Log::Log4perl->get_logger("sign_info");
+    
+    $krm = KeyRingManager->new($c->{'KEYRINGGNUPGHOME'},
+			       "$c->{'TEMPKEYRINGTOPDIRSTEM'}.$$",
+			       $c->{'PRESKIPLIST'},
+			       $c->{'KEY_SPECIFIC_SIGNATURE_LIMITS'},
+			       $c->{'MAX_NUMBER_OF_SIGNATURES_PER_KEY'},
+			       $c->{'MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY'},
+			       $a->{'GPGCMD'},
+			       $a->{'CPCMD'});
+    ($msg, $status) = $krm->init();
+    for my $e ( ['Active keys', 'active_keys' ],
+		['Known keys on preskip list', 'preskipped_keys' ],
+		['Unknown keys on preskip list', 'confdpreskiplist' ],
+		['Known keys with too many signatures', 'signatures_exceeded_keys' ],
+		['Known keys on key signature limit list', 'processed_sign_limits' ],
+		['Unknown keys on key signature limit list', 'signaturelimits' ],
+		['Expired keys', 'expired_keys' ],
+		['Revoked keys', 'revoked_keys' ]
+	) {
+	my @o =(@{$e});
+	my $keys = $krm->getKeys($o[1]);
+	print "$o[0] (", scalar(keys %{$keys}), "):\n";
+	foreach my $k (sort keys %{$keys}) {
+	    print " $k";
+	    if (ref($keys->{$k}) eq "Key") {
+		print ": sigs(", $keys->{$k}->getNumSignatures(), ")";
+		if ($keys->{$k}->getStatus() <= 1) {
+		    $mns = $keys->{$k}->getMaxNewSignatures();
+		    print (($mns >= 0) ?
+			   ", max new signatures on next refresh $mns." :
+			   ", number of new signatures is unlimited!");
+		}
+	    }
+	    print "\n";
+	}
+    }
+    print "Total number of unique key identifiers is ", $krm->numAllKeys(), ".\n";
+    $krm->close();
+}
+    
 sub update_key_ring {
     my ($c, $a, $m) = @_;
     my ($msg, $status);
     my ($kib, $ksb, $krm, $keyid);
-    my @keychunk = ();
-    my %verifykeys = ();
-    my $remem = 0;
-    my $notfound;
+    my $keychunk = [];
+    my $verifykeys;
     my $server = "";
     my @orderedservers = ();
     my $tempringtopdir = "$c->{'TEMPKEYRINGTOPDIRSTEM'}.$$";
@@ -1144,66 +1502,65 @@ sub update_key_ring {
     
     $krm = KeyRingManager->new($c->{'KEYRINGGNUPGHOME'},
 			       $tempringtopdir,
+			       $c->{'PRESKIPLIST'},
+			       $c->{'KEY_SPECIFIC_SIGNATURE_LIMITS'},
+			       $c->{'MAX_NUMBER_OF_SIGNATURES_PER_KEY'},
+			       $c->{'MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY'},
 			       $a->{'GPGCMD'},
 			       $a->{'CPCMD'});
     ($msg, $status) = $krm->init();
     goto CLEANUP_AND_QUIT if ($status);
-	
-    # Read in the keys that are valid and are thus subject to 
-    # updates of relevance, i.e. skip revoked and expired public
-    # keys and skip the ones on the preconfigured skip list.
-    
-    ($msg, $status) = $krm->getActiveKeyIds();
-    goto CLEANUP_AND_QUIT if ($status);
-	    
-    %verifykeys = map { ( $_ => 0 ); } @{$msg};
-	    
-    $remem = scalar(keys %verifykeys);
-    $notfound = 0;
-    # Removing the predefined keys to be skipped from verification
-    for $keyid (@{$c->{'PRESKIPLIST'}}) {
-	$keyid =~ s/^0x//o;
-	if (exists $verifykeys{$keyid}) {
-	    $logger->debug("(Pre)skipping key $keyid");
-	    delete $verifykeys{$keyid};
-	}
-	else {
-	    $logger->warn("Preskiplist contains key id $keyid that is not in the ring to be refreshed, remove it from the list.");
-	    $notfound++;
+
+    $logger->info("Total number of unique key ids including skip and signature limit lists: ", $krm->numAllKeys());
+    for my $e (	['Known keys on preskip list', 'preskipped_keys', 0 ],
+		['Unknown keys on preskip list', 'confdpreskiplist', 1 ],
+		['Known keys with too many signatures', 'signatures_exceeded_keys', 1 ],
+		['Known keys on key signature limit list', 'processed_sign_limits', 0 ],
+		['Unknown keys on key signature limit list', 'signaturelimits', 1],
+		['Expired keys', 'expired_keys', 0 ],
+		['Revoked keys', 'revoked_keys', 0 ],
+		['Keys to refresh', 'active_keys', 0 ]
+	) {
+	my @o =(@{$e});
+	my $keys = $krm->getKeys($o[1]);
+	$logger->info("$o[0] (", scalar(keys %{$keys}), "):");
+	if ($logger->is_debug() or $o[2]) {
+	    foreach my $k (sort keys %{$keys}) {
+		if (ref($keys->{$k}) eq "Key") {
+		    $logger->info(" $k: sigs(", $keys->{$k}->getNumSignatures(),
+				  ")", (($keys->{$k}->getStatus() <= 1) ?
+					", max new sigs " .
+					$keys->{$k}->getMaxNewSignatures() : ""));
+		}
+		else {
+		    $logger->info(" $k");
+		}
+	    }
 	}
     }
-    $logger->info("(Pre)skipping ", $remem - scalar(keys %verifykeys), " keys.");
-    $logger->info("(Pre)skipped keys _not_ present in the key ring being refreshed: $notfound keys.");
     
-    foreach (keys %verifykeys) {
-	$logger->debug("Key to be refreshed $_");
-    }
-    $logger->info("Refreshing ", scalar(keys %verifykeys), " keys in key ring ",
-		  $krm->getMasterRingDir());
-    
-    $kib = KeyIdBookie->new([ keys %verifykeys ],
+    $kib = KeyIdBookie->new($krm->getKeys('active_keys'),
 			    scalar(@{$c->{'KEYSERVERS'}}),
 			    $c->{'NUM_KEYS_TO_REFRESH_PER_REQUEST'});
     $ksb = KeyServerBookie->new($c->{'KEYSERVERS'},
 				$c->{'MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER'},
 				$c->{'MAX_WAIT_REFRESH_REQUEST_SECONDS'});
     
-    while (keys %verifykeys) {
-	@orderedservers = $ksb->orderKeyServersBestFirst();
-	$server = undef;
-	foreach (@orderedservers) {
-	    $server = $_;
-	    @keychunk = $kib->getKeyChunkToRefresh($server->getName());
-	    last if (@keychunk); # the server may have info on some of the keys
-	}
-	last if (!@keychunk or (!defined $server)); # No server could offer info on keys
+    while (1) {
+	($keychunk, $server) =
+	    $kib->keyChunkToRefreshFromServer($ksb->orderKeyServersBestFirst());
+	# No server could offer info on keys, or no keys can be refreshed with
+	# the available servers.
+	last if (!@{$keychunk} or (!defined $server));
 	
 	$logger->debug("Selected ", $server->getName(), " for refresh attempt");
-	$logger->debug("Refreshing ", scalar(@keychunk), " key ids.");
+	$logger->debug("Refreshing ", scalar(@{$keychunk}), " key ids.");
+	
 	($msg, $status) = $server->attemptKeyUpdate($a->{'GPGCMD'},
 						    "$tempringtopdir/workring",
 						    "$tempringtopdir/workring/gpg-refresh-run.output",
-						    @keychunk);
+						    @{$keychunk});
+
 	goto CLEANUP_AND_QUIT if ($status);
 	
 	# The gpg sub command output has been read by now.
@@ -1225,16 +1582,20 @@ sub update_key_ring {
 	    goto CLEANUP_AND_QUIT if ($status);
 	}
 
-	if ($kib->getKeyChunkToRefresh()) {
-	    # There are keys left to be searched for but we try to be nice
-	    # with the key servers
-	    my $st = int(rand($c->{'WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS'})) +
-		$c->{'WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS'};
+	# Do we need to politeness sleep before the next refresh round or
+	# can we just finish?
+	($keychunk, $server) =
+	    $kib->keyChunkToRefreshFromServer($ksb->orderKeyServersBestFirst());
+	last if (!@{$keychunk} or (!defined $server));
 
-	    if ($st) {
-		$logger->debug("Being nice with key servers - sleeping $st seconds");
-		sleep $st;
-	    }
+	# There are keys left to be searched for but we try to be nice
+	# with the key servers
+	my $st = int(rand($c->{'WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS'})) +
+	    $c->{'WAIT_GIVEN_SECONDS_BETWEEN_REFRESH_REQUESTS'};
+
+	if ($st) {
+	    $logger->debug("Being nice with key servers - sleeping $st seconds");
+	    sleep $st;
 	}
     }
     
@@ -1322,10 +1683,14 @@ sub main () {
 	'PRESKIPLIST' => [
 	    [ ],
 	    sub {
-		my @list = @{$_[0]};
-		return "Expecting list of hex key ids to skip, got " . ref($_[0]) if (ref($_[0]) ne "ARRAY");
-		for my $kid (@list) {
+		my $kid;
+		my %seen = ();
+		return "Expecting a list of hex key ids to skip, got " . ref($_[0]) if (ref($_[0]) ne "ARRAY");
+		for $kid (@{$_[0]}) {
 		    return "Not a valid hex form key id (16 digit) $kid." if ($kid !~ /^(?:0x)?[a-f\d]{16}$/io);
+		    return "A repeated key id on the preskip list: $kid"
+			if (exists $seen{$kid});
+		    $seen{$kid} = 1;
 		}
 		0;
 	    } ],
@@ -1370,11 +1735,36 @@ log4perl.appender.LOGFILE.layout.ConversionPattern=%d{yyyy-MM-dd HH:mm:ss} [%p] 
 	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
 		  0;
 	    } ],
+	'MAX_NUMBER_OF_SIGNATURES_PER_KEY' => [
+	    '1000',
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY' => [
+	    '100',
+	    sub { return "Expecting an integer value instead of $_[0]." if ($_[0] !~ /^\d+$/o);
+		  0;
+	    } ],
+	'KEY_SPECIFIC_SIGNATURE_LIMITS' => [
+	    [],
+	    sub {
+		my $type;
+		my $row;
+		if (ref($_[0]) ne 'ARRAY') {
+		    my $type = (ref($_[0]) ? "a " . ref($_[0]) . " reference" : $_[0]);
+		    return "Expecting an array of key signature limit definitions, now $type given.";
+		}
+		for $row (@{$_[0]}) {
+		    return "Invalid key signature limit specification \"$row\"." if ($row !~ /^[a-f\d]{16}\s+\d+\s+\d+$/io);
+		}
+		0;
+	    } ],
 	);
 
     my %K = (
 	'showconf' => \&show_configuration,
 	'showconfig' => \&show_configuration,
+	'siginfo' => \&show_sign_info,
 	'refresh' => \&update_key_ring,
 	'help' => undef, # Leave as undef, function usage already covers this.
 	);

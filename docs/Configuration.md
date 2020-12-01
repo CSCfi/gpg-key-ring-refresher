@@ -7,7 +7,7 @@ The precedence of sources of configuration information is
 1. hard-coded defaults.
 
 Hard-coded defaults act as fall-backs if no other source defines a
-configuration parameter. You may check them with
+configuration parameter. You may check the configuration used with
 ```
     gpg-key-ring-refresher showconf
 ```
@@ -66,6 +66,20 @@ dropping your requests or not returning any data.
 
 `WAIT_MAX_RANDOM_SECONDS_BETWEEN_REFRESH_REQUESTS=180`
 
+The maximum number of signatures permitted for a key by default,
+of course, YMMV (or, now that we are all so brexcited, a more
+appropriate expression in directively orthodox Brusselian EU speak
+would be VKPV). See, section `key_specific_signature_limits` below
+for overriding.
+
+`MAX_NUMBER_OF_SIGNATURES_PER_KEY=1000`
+
+The maximum number of new signatures permitted for a key by default
+during a single refresh run. See, section `key_specific_signature_limits`
+below for overriding.
+
+`MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY=100`
+
 ### 1.2. Section `][] hmmm___some_key_servers_are_also_needed  ]][`
 
 Here you can define the key servers that will be tried for key information.
@@ -84,8 +98,9 @@ The identifiers are expected to be 16 hex digits long, e.g.
 0x1111222233334444
 5555666677778888
 ```
-Revoked and expired keys are filtered out dynamically before the refreshals
-begin.
+Revoked and expired keys are filtered out dynamically before the refresh
+attempts begin.
+
 ### 1.4. Section `][] and_logging_to_a_file_would_be_handy ]][`
 
 This section defines the Log::Log4perl initialization parameters. All
@@ -100,3 +115,21 @@ log4perl.appender.LOGFILE.mode=append
 log4perl.appender.LOGFILE.layout=PatternLayout
 log4perl.appender.LOGFILE.layout.ConversionPattern=%d{yyyy-MM-dd HH:mm:ss} [%p] - %m%n
 ```
+### 1.5. Section `][] key_specific_signature_limits ]][`
+
+In this section you may specify key specific signature limits. The limits
+given here override the global defaults MAX_NUMBER_OF_SIGNATURES_PER_KEY
+and MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY.
+
+The entries are tuples made of the key identifier, the maximum number of
+signatures permitted for the key and the maximum number of new signatures
+permitted on a single refresh run, all separated by whitespace e.g.
+```
+AAAABBBBCCCCDDDD 2000 50
+1111111122222222 140 20
+```
+
+If you set either number to zero, it means there is no upper limit on
+the number of signatures (max or per refresh run). You should _never_
+set both to zero since this effectively leaves the key vulnerable to a
+signature flooding attack.

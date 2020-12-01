@@ -17,7 +17,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
 		  -w seconds | -s seconds | -r max_seconds |
 		  -k number | -f number ] refresh
     gpg-key-ring-refresher -h
-    gpg-key-ring-refresher { [ -c conf_file_name ] showconf | help }
+    gpg-key-ring-refresher { [ -c conf_file_name ] showconf | siginfo | help }
 
     Options:
       -c = use given configuration file
@@ -48,9 +48,10 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
     Commands:
       showconf  - show configuration parameters and values used	
       refresh   - refresh the key ring (requires either option -c or -H)
+      siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.0.6
+    v. 0.1.0
 
 ```
 ## 3. Configuration
@@ -88,7 +89,7 @@ entries for hints as to what went wrong. You may also raise the
 verbosity of logging by setting the log level to DEBUG, TRACE or ALL if the
 aforementioned hints are not informative enough.
 
-NB: Setting a more reticent log level than INFO will effectively leave
+NB: Setting a more reticent log level than INFO will leave
 the log file with no indication of gpg-key-ring-refresher's
 exit statuses.
 

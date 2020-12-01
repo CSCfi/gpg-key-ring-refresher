@@ -36,6 +36,20 @@ AAAABBBBCCCCDDDD:12
 BBBBBBBBBBBBBBBB:8
 ...
 ```
+## Keys exceeding the maximum signature limits allowed
+
+If it turns out that some keys constantly hit the maximum signature limits
+allowed, you should do one of the following to reduce the number of unnecessary
+PGP key server accesses:
+
+* define or raise (caution here!) the key specific signature limits for the
+  key in question in the `key_specific_signature_limits` configuration section,
+* raise (even more caution here!) the global signature limit configuration
+  parameters (MAX_NUMBER_OF_SIGNATURES_PER_KEY and/or
+  MAX_NUMBER_OF_NEW_SIGNATURES_PER_KEY), or,
+* if enough is enough, put the key on the preskip list so that it will not
+  be refreshed at all.
+
 ## The choice of key servers
 
 Again, assuming the log level is INFO or chattier, gpg-key-ring-refresher
