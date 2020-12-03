@@ -51,7 +51,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.1.0
+    v. 0.1.1
 
 ```
 ## 3. Configuration

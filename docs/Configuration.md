@@ -20,6 +20,7 @@ sections:
 * `][] hmmm___some_key_servers_are_also_needed  ]][`
 * `][] skip_these_gpg_keys ]][`
 * `][] and_logging_to_a_file_would_be_handy ]][`
+* `][] key_specific_signature_limits ]][`
 
 All lines in the configuration file ahead of the first section are ignored.
 The order of the sections is irrelevant.

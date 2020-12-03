@@ -5,7 +5,7 @@ This script shouldn't exist. But it does in an attempt to work around
 the following shortcomings of the plain gpg tools and in particular the
 refresh functionality:
 
- * gpg refresh connections to PGP key servers may hang indefinitely,
+ * gpg refresh connections to PGP key servers may hang,
  * PGP key servers may return no info on keys being refreshed, even
    though they have info,
  * gpg refresh and gpg-agent are not able to handle gracefully
@@ -33,7 +33,7 @@ remaining servers are not tried. If a key is not known to a key
 server, then the remaining servers are tried one by one until info is
 found or no more servers can be tried. Keys unknown to all servers are
 listed at the end of the refresh run (see the log file). These
-keys ought to be added to the preskiplist to avoid costly polling of
+keys ought to be added to the preskip list to avoid costly polling of
 servers. Alternatively, ask the owners of those keys to upload
 them to well-known servers. Likewise, the keys that have exceeded
 the number of signatures allowed are reported. The number of signature

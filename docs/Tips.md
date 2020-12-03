@@ -4,7 +4,7 @@ From time to time it makes sense to analyse the log entries to
 optimise the refresh runs. For example, by time you may end up adding
 keys to the key ring that are not published at all.
 gpg-key-ring-refresher will discover these as they weren't
-on your initially configured preskiplist.
+on your initially configured preskip list.
 
 Also, the information provided by the key servers should be the same
 no matter what key server happens to be the source. In practise, this
@@ -17,7 +17,7 @@ Assuming you've set the log level of gpg-key-ring-refresher to
 INFO or more talkative, the log will contain a list of keys that were
 not found during a refresh run. If keys continuously appear as "not found"
 in the log, then they probably haven't been published at all and should
-be put on the preskiplist. Doing this shortens the overall execution times
+be put on the preskip list. Doing this shortens the overall execution times
 of gpg-key-ring-refresher (and means less pain to the key servers).
 
 For example, run
