@@ -289,11 +289,19 @@ sub refreshedButNotFoundKeys {
     }
 }
 
+sub getStatus {
+    my $self = shift;
+    my $status = 0;
+    $status = 36 if (keys %{$self->{'changed_keys_sigs_not_ok'}});
+    $status = 37 if (keys %{$self->{'not_found_keys'}});
+    $status;
+}
+
 sub stats {
     my $self = shift;
     my ($s, $numkeys, $id, $m);
     my @o = ();
-    
+
     for $s ( ['unchanged keys', 'unchanged_keys', undef ],
 	     ['changed keys adhering to signature limits', 'changed_keys_sigs_ok', undef ],
 	     ['changed keys exceeding signature limits', 'changed_keys_sigs_not_ok',
@@ -870,7 +878,7 @@ sub init {
 	}
     }
 
-    $logger->info("Set up temp ring dir $self->{'temptopdir'}");
+    $logger->debug("Set up temp ring dir $self->{'temptopdir'}");
 
     # Setting up the mastercopy and workring gnupg dirs.
     $self->_copyring($self->{'masterringdir'}, $self->{'mastercopydir'});
@@ -1005,7 +1013,6 @@ sub init {
       (keys %processedsignlimits); # let's subtract the anomaly introduced
                                    # above.
     ${$self}{'total_num_key_ids'} = $num;
-    $logger->info("Total number of unique key identifiers is $num");
     ("", 0);
 }
     
@@ -1151,7 +1158,7 @@ sub close {
    }
 
    if (!$self->{'skip_tempdir_deletion'}) {
-       $logger->info("Deleting temp ring dir $self->{'temptopdir'}");
+       $logger->debug("Deleting temp ring dir $self->{'temptopdir'}");
        $self->_deletetempringdirs($self->{'temptopdir'});
    }
 
@@ -1235,7 +1242,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.1.1
+    v. 0.1.2
 ";
 }
 
@@ -1467,7 +1474,8 @@ sub show_sign_info {
 	) {
 	my @o =(@{$e});
 	my $keys = $krm->getKeys($o[1]);
-	print "$o[0] (", scalar(keys %{$keys}), "):\n";
+	my $numkeys = scalar(keys %{$keys});
+	print "$o[0] ($numkeys)", ($numkeys ? ":\n" : "\n");
 	foreach my $k (sort keys %{$keys}) {
 	    print " $k";
 	    if (ref($keys->{$k}) eq "Key") {
@@ -1475,7 +1483,7 @@ sub show_sign_info {
 		if ($keys->{$k}->getStatus() <= 1) {
 		    $mns = $keys->{$k}->getMaxNewSignatures();
 		    print (($mns >= 0) ?
-			   ", max new signatures on next refresh $mns." :
+			   ", max new signatures on next refresh $mns" :
 			   ", number of new signatures is unlimited!");
 		}
 	    }
@@ -1523,7 +1531,9 @@ sub update_key_ring {
 	) {
 	my @o =(@{$e});
 	my $keys = $krm->getKeys($o[1]);
-	$logger->info("$o[0] (", scalar(keys %{$keys}), "):");
+	my $numkeys = scalar(keys %{$keys});
+	$logger->info("$o[0] ($numkeys)",
+		      (($numkeys and ($logger->is_debug() or $o[2])) ? ":" : ""));
 	if ($logger->is_debug() or $o[2]) {
 	    foreach my $k (sort keys %{$keys}) {
 		if (ref($keys->{$k}) eq "Key") {
@@ -1545,7 +1555,8 @@ sub update_key_ring {
     $ksb = KeyServerBookie->new($c->{'KEYSERVERS'},
 				$c->{'MAX_NUMBER_OF_CONSECUTIVELY_FAILED_REFRESH_ATTEMPTS_PER_KEY_SERVER'},
 				$c->{'MAX_WAIT_REFRESH_REQUEST_SECONDS'});
-    
+
+    $logger->info("Starting refresh runs ...");
     while (1) {
 	($keychunk, $server) =
 	    $kib->keyChunkToRefreshFromServer($ksb->orderKeyServersBestFirst());
@@ -1600,6 +1611,7 @@ sub update_key_ring {
     }
     
     # keys unchanged, updated, not found, num tries, success rate etc
+    $logger->info("Result of refresh runs:");
     $kib->stats();
     # key server reliability, num requests, success rate etc
     $ksb->stats();
@@ -1610,8 +1622,9 @@ sub update_key_ring {
 
     # Closing takes care of updates to the true master ring if necessary.
     my ($msg2, $status2) = $krm->close();
-    $logger->info($msg2) if ($status2);
+    $logger->warn($msg2) if ($status2);
 
+    $status = $kib->getStatus() if (!$status);
     $logger->info("Finished $m->{'thecommand'} run, ", scalar(localtime()),
 		  " (status $status, duration ",
 		  &dayshoursminssecs(time() - $m->{'starttimestamp'}), ")");

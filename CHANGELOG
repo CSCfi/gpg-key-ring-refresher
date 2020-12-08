@@ -1,7 +1,15 @@
+2020-12-08  Mika Silander <mika.silander@csc.fi>
+
+	Improvements to logger output, both INFO and DEBUG levels.
+	Made logged exit status reflect keys not found and keys exceeding
+	signature limits in unattended runs of the script.
+
+	Version 0.1.2
+
 2020-12-03  Mika Silander <mika.silander@csc.fi>
 
 	Small fixes to documentation.
-	
+
 2020-12-01  Mika Silander <mika.silander@csc.fi>
 
 	Implemented functionality to set limits on the number of
