@@ -76,10 +76,6 @@ pgp.circl.lu:20
 pgp.circl.lu:20
 pgp.circl.lu:23
 pgp.circl.lu:39
-pgp.key-server.io:0
-pgp.key-server.io:15
-pgp.key-server.io:20
-pgp.key-server.io:22
 pgp.surfnet.nl:0
 pgp.surfnet.nl:20
 pgp.surfnet.nl:20

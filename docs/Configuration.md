@@ -10,6 +10,7 @@ Hard-coded defaults act as fall-backs if no other source defines a
 configuration parameter. You may check the configuration used with
 ```
     gpg-key-ring-refresher showconf
+    gpg-key-ring-refresher -c mytailoured.conf showconf
 ```
 ## 1. Contents of the configuration file
 

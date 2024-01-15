@@ -51,7 +51,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.1.2
+    v. 0.1.3
 
 ```
 ## 3. Configuration
@@ -75,8 +75,8 @@ For the individual configuration parameters, see docs/Configuration.md.
 
 Monitoring or alerting on errors is not supported by the script
 itself. Instead you may use some monitoring system, e.g. Icinga,
-Zabbix etc to check the log entries of gpg-key-ring-refresher,
-or, write a separate monitoring script yourself.
+Zabbix etc to check the log entries of gpg-key-ring-refresher, modification
+time stamps of the key ring files, or, write a separate monitoring script yourself.
 Assuming the logging level is set to INFO (or more detailed), then the last
 line of a gpg-key-ring-refresher run in the log tells the exit
 status of the run, e.g. your monitor should at a minimum

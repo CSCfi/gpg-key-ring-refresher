@@ -6,8 +6,8 @@ the following shortcomings of the plain gpg tools and in particular the
 refresh functionality:
 
  * gpg refresh connections to PGP key servers may hang,
- * PGP key servers may return no info on keys being refreshed, even
-   though they have info,
+ * PGP key servers may return some or no info on keys being refreshed, even
+   though they would have info available,
  * gpg refresh and gpg-agent are not able to handle gracefully
    PGP keys targeted by signature flooding attacks, see e.g.
    * https://lwn.net/Articles/792366/ , or, 
@@ -32,7 +32,7 @@ trusts the first key server returning an answer on the key, the
 remaining servers are not tried. If a key is not known to a key
 server, then the remaining servers are tried one by one until info is
 found or no more servers can be tried. Keys unknown to all servers are
-listed at the end of the refresh run (see the log file). These
+listed at the end of the refresh run (see the log generated). These
 keys ought to be added to the preskip list to avoid costly polling of
 servers. Alternatively, ask the owners of those keys to upload
 them to well-known servers. Likewise, the keys that have exceeded
@@ -78,4 +78,4 @@ Mika Silander
 Copyright
 ---------
 
-CSC - IT Centre for Science Ltd, www.csc.fi, 2020
+CSC - IT Centre for Science Ltd, www.csc.fi, 2020-

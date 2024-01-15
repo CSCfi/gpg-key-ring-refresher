@@ -1,3 +1,18 @@
+2024-01-12  Mika Silander <mika.silander@csc.fi>
+
+	Added some new log messages, improved some log messages, fixed some
+	inconsistencies in existing log messages when it comes to the choice of
+	INFO or WARN level messages.
+
+	Changed the way the auxiliary executables are found, this to compensate
+	the more limited PATH cron usually offers to the tasks it runs.
+
+	Dropped pgp.key-server.io from the preconfigured PGP key servers.
+
+	README.md and docs/*.md retouched.
+
+	Version 0.1.3
+
 2020-12-08  Mika Silander <mika.silander@csc.fi>
 
 	Improvements to logger output, both INFO and DEBUG levels.

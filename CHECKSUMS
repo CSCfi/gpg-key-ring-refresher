@@ -1,15 +1,15 @@
 
 The SHA-256 file checksums of this release:
 
-d9acaa2301459ebc94a8d2d2f047b1e6f0e53ded1fcfb9dee0199f0bcf60d35f  ./docs/Configuration.md
-43ed1779316d827bab23fd58ef511f1c5a6432000bde3288e68e0802655fc827  ./docs/Tips.md
-72c80aee7e9a00c8ce53210d0e79838bbce73306775634172024dae32e6052a7  ./docs/Overview.md
-94a011f49e0d1711acf89e2dfb8f01d7423c39ace565b144047a38f705a77d9b  ./CHANGELOG
-f82777f15dad4d988054242729c3ed6056edee454b7dcbebeb704a21c2d2281b  ./bin/gpg-key-ring-refresher
-3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  ./LICENSE
-54a46c644c4eb6f128f99f7f08434918617b31b680522ed4acb57c9424372827  ./VERSION
-9c64424597aae9a91079b4daa6743270f282cfe527dcbc97aa588fe27f4cc55f  ./README.md
+1309052885713a46911378fa41382dcad33446b075f7a9c766997ed3a287c206  ./bin/gpg-key-ring-refresher
+333e938ae5b08fdecf0eed9ec070d28b7ffebd2f1806dfa89fc4f19a4ad3289e  ./CHANGELOG
+b1eeee56c4b2a974cab11bd839b68bc7da844734bac18e8c6fc8df738883ec3d  ./docs/Configuration.md
+feda8b450af419740da21fd20a588e675075cd812438a68608121e85cb6e38f4  ./docs/Overview.md
+c0b6f5656be31df85fbe809b96dc2609f6ede0158df92d097100ed6cbd092004  ./docs/Tips.md
 0609b0f2a231c6b22dc034a6ad06df43e0fad52c31adca25db96b0cd37bd9571  ./KNOWN_ISSUES
+3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  ./LICENSE
+0ea4b8658b0c14f8235837c22006c6b4bdc0f5c5355e8ff9f0aa777ca567d225  ./README.md
+dbf0978ec2b587a5d6187fdcc41cce9ff2c0eb8eefadba0eb51f3840ab6eeb46  ./VERSION
 
 PGP key id for signature verification: 0xF93BBD3EF28971EC.
 
