@@ -82,7 +82,7 @@ If the production ring's files differ from the secondary directories',
 then a directory rotation is performed first on the secondary tracking
 directory. The first integer parameter to
 ```copy-and-rotate-dir-if-changes-found``` defines the number of
-tracked and rotated directories to be retained. After the rotation,
+tracked (rotated) directories to be retained. After the rotation,
 the current production PGP ring is copied to create a new, fresh
 secondary tracking directory. Finally, if the gpg-key-ring-refresher
 updates the keyring immediately, you may opt for appending a second
