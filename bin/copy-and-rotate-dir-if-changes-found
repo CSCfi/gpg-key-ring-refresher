@@ -1,0 +1,91 @@
+#/bin/bash
+#
+# SPDX-FileCopyrightText: 2024- Mika Silander (mika.silander@csc.fi) and CSC - IT Center of Science Ltd (www.csc.fi)
+#
+# SPDX-License-Identifier: MIT
+#
+# For info on SPDX, see https://spdx.org
+#
+
+DIRECTORYROTATOR=directory-rotator
+
+function usage() {
+    command=$(basename "$1")
+    cat <<USAGE
+
+Usage:
+    $command [ -h | --help | -? ] max_rot_num source_dir target_dir
+
+    Options:
+      -h = this help
+
+    max_rot_num = maximum number of rotated directories retained
+    source_dir  = the source directory being tracked
+    target_dir  = the tracked copy of the source directory
+
+USAGE
+}
+
+if [ $# -ne 3 ]; then
+    echo "Define a rotation count, a source and a target directory."
+    usage $0
+    exit 1
+fi
+
+ROTNUM=$1
+
+if [ $(echo -n $ROTNUM | grep -c -E '^(-h|--help|-\?)$') -eq 1 ]; then
+    usage $0
+    exit 0
+fi
+
+if [ $(echo -n $ROTNUM | grep -c -E '^[1-9][0-9]*$') -ne 1 ]; then
+    echo "Expecting a positive maximum number of rotations to retain: $ROTNUM given."
+    usage $0
+    exit 1
+fi
+
+if [ ! -d "$2" ]; then
+    echo "$2 - not a source directory"
+    usage $0
+    exit 1
+fi
+
+# Ensure the availability of directory-rotator
+which $DIRECTORYROTATOR > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    DIRECTORYROTATOR=/usr/local/sbin/directory-rotator
+fi
+
+if [ ! -d "$3" ]; then
+    # We have no target directory to compare to: we can
+    # simply copy the source dir to the target dir without
+    # any rotations.
+    cp -a "$2" "$3"
+    exit $?
+fi
+
+# We have an existing target directory. This directory just tracks
+# the source directory: check if the source directory has changed
+# wrt to the tracking target directory.
+
+diff -q -r "$2" "$3"  /dev/null 2>&1
+DIFFSTATUS=$?
+if [ $DIFFSTATUS -eq 0 ]; then
+    # No changes => no need to copy nor rotate.
+    exit 0
+fi
+
+if [ $DIFFSTATUS -eq 1 ]; then
+    # Source dir has changed wrt the tracking, target directory.
+    # First we save the current tracking directory by including
+    # it in the rotation cycle.
+    $DIRECTORYROTATOR $ROTNUM "$3" > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+	exit 1
+    fi
+    # We then copy the newest dir to be the current (most recent) dir.
+    # IOW, it is the rotateable copy of the current, most recent dir tracked.
+    cp -a "$2" "$3"
+    exit $?
+fi

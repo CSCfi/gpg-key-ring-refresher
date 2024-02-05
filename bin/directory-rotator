@@ -1,0 +1,109 @@
+#!/usr/bin/perl
+#
+# SPDX-FileCopyrightText: 2024- Mika Silander (mika.silander@csc.fi) and CSC - IT Center of Science Ltd (www.csc.fi)
+#
+# SPDX-License-Identifier: MIT
+#
+# For info on SPDX, see https://spdx.org
+#
+# Btw, with dynamically chosen renamers and file name checks we could make this
+# script rotate also individual files. Needs an additional option to choose between
+# files and directories. And dynamic functions means we need to apply "no strict"
+# in a few places.
+
+use strict;
+
+sub usage() {
+    my $thiscommand = shift;
+"
+A programme for rotating entire directories.
+
+    $thiscommand [ -h | --help | -? ] max_directories_kept rotate_directory
+
+    Options:
+      -h = this help
+
+    max_directories_kept = the maximum number of older, rotated directories kept
+    rotate_directory     = the directory which is to be rotated
+
+";
+}
+
+sub main() {
+    my $command = $0;
+    my $maxdirs = undef;
+    my $rotatedir = undef;
+    my $basedir = undef;
+    my %prevrotated = ();
+    my @prevordered = ();
+    my $numprev = 0;
+    
+    $command =~ s#^(?:.*/)?([^/]+)$#$1#g;
+
+    if ($ARGV[0] =~ m/^(?:-h|--help|-\?)$/g) {
+	print &usage($command);
+	exit(0);
+    }
+    
+    if (scalar(@ARGV) != 2) {
+	print STDERR &usage($command);
+	exit(1);
+    }
+
+    if ($ARGV[0] !~ m/^([1-9]\d*)$/g) {
+	print STDERR "max_directories_kept must be a number greater than zero, $ARGV[0] was given.\n";
+	print STDERR &usage($command);
+	exit(1);
+    }
+    $maxdirs = $1;
+
+    if (! -d $ARGV[1]) {
+	print STDERR "rotate_directory \"$ARGV[1]\" is non-existent or not a directory.\n";
+	print STDERR &usage($command);
+	exit(1);
+    }
+    $rotatedir = $ARGV[1];
+
+    # We deduce the directory level above the directory to be rotated, set it to basedir.
+    # Also note that rotatedir becomes relative to basedir here.
+    $basedir = ".";
+    if ($rotatedir =~ m#^(.*/)([^/]+)$#g) {
+	$rotatedir = $2;
+	$basedir = $1;
+	chop($basedir); # cut last / char away!
+    }
+    
+    # We open the directory and collect the existing rotated directories if any.
+    opendir(BASEDIR, $basedir) || die "Failed to open $basedir.\n";
+    while (my $dirname = readdir(BASEDIR)) {
+	if ($dirname =~ m#${rotatedir}\.([1-9]\d*)$#og) {
+	    $prevrotated{$1} = "$basedir/$dirname" if (-d "$basedir/$dirname");
+	}
+    }
+    closedir(BASEDIR);
+
+    @prevordered = sort(keys %prevrotated);
+    $numprev = @prevordered;
+    # We remove those that rotate beyond $maxdirs.
+    if ($numprev >= $maxdirs) {
+	for (my $k = $maxdirs; $k <= $numprev; $k++) {
+	    `rm -r $prevrotated{$k}`;
+	}
+    }
+    # We adjust maxdirs to the real number of dirs left
+    $maxdirs = $numprev+1 if ($maxdirs > $numprev);
+    # We rotate the remaining starting from the oldest, of course. And supposing there are some.
+    for (my $i = $maxdirs-1; $i > 0; $i--) {
+	rename "$prevrotated{$i}", "$basedir/$rotatedir." . ($i+1)
+	    || die "Failed to rotate \"$prevrotated{$i}\" to \"$basedir/$rotatedir." . ($i+1) . "\".\n";
+    }
+
+    # Finally, we "rotate" the current dir
+    rename "$basedir/$rotatedir", "$basedir/$rotatedir.1"
+	|| die "Failed to rotate \"$basedir/$rotatedir\" to \"$basedir/$rotatedir.1\".\n";
+    exit(0);
+}
+
+&main();
+
+exit(0);

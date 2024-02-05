@@ -71,6 +71,26 @@ refresh requests or claiming they have no info.
 
 For the individual configuration parameters, see docs/Configuration.md.
 
+If you're concerned about the automatic updates leaving your PGP key ring in an inconsistent state,
+make sure you backup your keyring regularly, or, use the ```copy-and-rotate-dir-if-changes-found``` script
+together with the above cron invocation, e.g:
+```
+15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps && /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh
+```
+
+If the production ring's files differ from the secondary directories',
+then a directory rotation is performed first on the secondary tracking
+directory. The first integer parameter to
+```copy-and-rotate-dir-if-changes-found``` defines the number of
+tracked and rotated directories to be retained. After the rotation,
+the current production PGP ring is copied to create a new, fresh
+secondary tracking directory. Finally, if the gpg-key-ring-refresher
+updates the keyring immediately, you may opt for appending a second
+run of ```copy-and-rotate-dir-if-changes-found``` as the last command
+of the cron run. This would leave your production PGP ring and the
+secondary tracking directory identical with the copy of the production
+key ring after every refresh.
+
 ## 4. Monitoring for or alerting on errors
 
 Monitoring or alerting on errors is not supported by the script
