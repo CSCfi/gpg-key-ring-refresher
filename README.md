@@ -59,6 +59,11 @@ gpg-key-ring-refresher requires the following software to be present:
  * gpg2 executables (gpg, gpg-agent, dirmngr)
  * cp and tty executables
 
+The auxiliary bash script copy-and-rotate-dir-if-changes-found relies
+on a few executables practically always present in every Linux distro.
+The directory-rotator is written in perl and imposes no further
+dependencies.
+
 Nitty-gritty details
 --------------------
 

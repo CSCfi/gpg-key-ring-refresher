@@ -26,6 +26,7 @@ A programme for rotating entire directories.
     max_directories_kept = the maximum number of older, rotated directories kept
     rotate_directory     = the directory which is to be rotated
 
+    v0.1.4
 ";
 }
 

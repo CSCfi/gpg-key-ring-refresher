@@ -51,7 +51,7 @@ A programme for refreshing a GPG2 key ring against info from PGP key servers.
       siginfo   - show key ring signatures
       help      - this help (same as option h)
 
-    v. 0.1.3
+    v0.1.4
 
 ```
 ## 3. Configuration
@@ -78,18 +78,16 @@ together with the above cron invocation, e.g:
 15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps && /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh
 ```
 
-If the production ring's files differ from the secondary directories',
-then a directory rotation is performed first on the secondary tracking
-directory. The first integer parameter to
-```copy-and-rotate-dir-if-changes-found``` defines the number of
-tracked (rotated) directories to be retained. After the rotation,
-the current production PGP ring is copied to create a new, fresh
-secondary tracking directory. Finally, if the gpg-key-ring-refresher
-updates the keyring immediately, you may opt for appending a second
-run of ```copy-and-rotate-dir-if-changes-found``` as the last command
-of the cron run. This would leave your production PGP ring and the
-secondary tracking directory identical with the copy of the production
-key ring after every refresh.
+If the production ring's files above differ from the secondary directory's (i.e.
+/home/user/.gnupg.bkps/.gnupg), then a directory rotation is performed first on the
+secondary tracking directory. The first integer parameter to
+```copy-and-rotate-dir-if-changes-found``` defines the number of tracked (rotated)
+directories to be retained. After the rotation, the current production GPG ring is copied
+to create a new, fresh secondary tracking directory. Finally, if the
+gpg-key-ring-refresher updates the keyring, you may opt for appending a second
+run of ```copy-and-rotate-dir-if-changes-found``` as the last command of the cron
+run. This would leave your production GPG ring and the secondary tracking directory
+identical with the copy of the production key ring after every refresh.
 
 ## 4. Monitoring for or alerting on errors
 
@@ -99,7 +97,7 @@ Zabbix etc to check the log entries of gpg-key-ring-refresher, modification
 time stamps of the key ring files, or, write a separate monitoring script yourself.
 Assuming the logging level is set to INFO (or more detailed), then the last
 line of a gpg-key-ring-refresher run in the log tells the exit
-status of the run, e.g. your monitor should at a minimum
+status of the run, e.g. your monitoring solution should at a minimum
 look for non-zero status values from those lines:
 ```
 2020-09-19 04:54:15 [INFO] Finished gpg-key-ring-refresher run, Sat Sep 19 04:54:15 2020 (status 0, duration 02:39:14)
@@ -121,16 +119,14 @@ file already exists, we check whether the process owning the pid file
 is still running. If it is running, we bail out with a warning, if not, we
 attempt to delete and recreate the pid file and lock it exclusively.
 
-To ensure integrity, MD5 sums are counted over pubring.kbx and
-trustdb.gpg. Locking them is not attempted since most other unrelated
-processes do not honour advisory file locks. If new key data is found
-and the MD5 sums counted at the end of the refresh run match the ones
-counted at the beginning, then the master key ring files are
-updated. A mismatch means the master key ring has been modified during
-the refresh run and we can't overwrite the refreshed info over the key
-ring files without losing the other changes. Subsequent
-gpg-key-ring-refresher runs will however mend the
-situation as they eventually (re)fetch the same key information updates.
+To ensure integrity, MD5 sums are counted over pubring.kbx and trustdb.gpg. Locking them
+is not attempted since most other unrelated processes do not honour advisory file
+locks. If new key data is found and the MD5 sums counted at the end of the refresh run
+still match the ones counted at the beginning, then the master key ring files are
+updated. A mismatch means the master key ring has been modified during the refresh run and
+we can't overwrite the refreshed info over the key ring files without losing the other
+changes. Subsequent gpg-key-ring-refresher runs will however mend the situation as they
+eventually (re)fetch the same key information updates.
 
 ## 6. Error messages and exit codes
 

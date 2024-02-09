@@ -1,8 +1,8 @@
-2024-02-05  Mika Silander <mika.silander@csc.fi>
+2024-02-09  Mika Silander <mika.silander@csc.fi>
 
 	Added aux scripts directory-rotator and copy-and-rotate-dir-if-changes-found
 	to safely rotate the production PGP key ring being automatically refreshed.
-	This can be used in the absense of a full-fledged backup solution.
+	These can be used in the absense of a full-fledged backup solution.
 
 	Updated the documentation accordingly.
 

@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 #
 # SPDX-FileCopyrightText: 2024- Mika Silander (mika.silander@csc.fi) and CSC - IT Center of Science Ltd (www.csc.fi)
 #
@@ -13,41 +13,65 @@ function usage() {
     command=$(basename "$1")
     cat <<USAGE
 
-Usage:
-    $command [ -h | --help | -? ] max_rot_num source_dir target_dir
+    $command [ -h | --help | -? ] [ -s skip_pattern ]
+             max_rot_num source_dir target_dir
 
     Options:
       -h = this help
+      -s = skip pattern defining file and directory names that are ignored in comparison,
+           note: syntax is what diff -x expects.
 
     max_rot_num = maximum number of rotated directories retained
     source_dir  = the source directory being tracked
-    target_dir  = the tracked copy of the source directory
+    target_dir  = the target directory under which the source directory gets copied
+
+    v0.1.4
 
 USAGE
 }
 
+COMMAND=$0
+DIFFPATTERN=""
+RSYNCPATTERN=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+
+        -h|--help|"-?")
+            usage $COMMAND
+            exit 0
+            ;;
+
+        -s|--skip)
+	    shift
+            DIFFPATTERN="-x $1"
+	    RSYNCPATTERN="--exclude=$1"
+            shift
+            break
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
 if [ $# -ne 3 ]; then
     echo "Define a rotation count, a source and a target directory."
-    usage $0
+    usage $COMMAND
     exit 1
 fi
 
 ROTNUM=$1
 
-if [ $(echo -n $ROTNUM | grep -c -E '^(-h|--help|-\?)$') -eq 1 ]; then
-    usage $0
-    exit 0
-fi
-
 if [ $(echo -n $ROTNUM | grep -c -E '^[1-9][0-9]*$') -ne 1 ]; then
     echo "Expecting a positive maximum number of rotations to retain: $ROTNUM given."
-    usage $0
+    usage $COMMAND
     exit 1
 fi
 
 if [ ! -d "$2" ]; then
     echo "$2 - not a source directory"
-    usage $0
+    usage $COMMAND
     exit 1
 fi
 
@@ -57,11 +81,17 @@ if [ $? -ne 0 ]; then
     DIRECTORYROTATOR=/usr/local/sbin/directory-rotator
 fi
 
-if [ ! -d "$3" ]; then
+# We remove trailing slashes due to rsync ...
+SRCDIR=$(echo -n "$2" | sed 's/\([^\/]\)\/*$/\1/g')
+BASEDIR=$(basename "$SRCDIR")
+TGTDIR=$(echo -n "$3" | sed 's/\([^\/]\)\/*$/\1/g')
+
+if [ ! -d "$TGTDIR" ]; then
     # We have no target directory to compare to: we can
     # simply copy the source dir to the target dir without
     # any rotations.
-    cp -a "$2" "$3"
+    mkdir -p "$TGTDIR"
+    rsync -a $RSYNCPATTERN "$SRCDIR" "$TGTDIR"
     exit $?
 fi
 
@@ -69,23 +99,23 @@ fi
 # the source directory: check if the source directory has changed
 # wrt to the tracking target directory.
 
-diff -q -r "$2" "$3"  /dev/null 2>&1
+diff $DIFFPATTERN -q -r "$SRCDIR" "$TGTDIR/$BASEDIR" > /dev/null 2>&1
 DIFFSTATUS=$?
-if [ $DIFFSTATUS -eq 0 ]; then
-    # No changes => no need to copy nor rotate.
-    exit 0
-fi
 
 if [ $DIFFSTATUS -eq 1 ]; then
     # Source dir has changed wrt the tracking, target directory.
     # First we save the current tracking directory by including
     # it in the rotation cycle.
-    $DIRECTORYROTATOR $ROTNUM "$3" > /dev/null 2>&1
+    $DIRECTORYROTATOR $ROTNUM "$TGTDIR/$BASEDIR" > /dev/null 2>&1
     if [ $? -ne 0 ]; then
-	exit 1
+	exit $?
     fi
     # We then copy the newest dir to be the current (most recent) dir.
     # IOW, it is the rotateable copy of the current, most recent dir tracked.
-    cp -a "$2" "$3"
+    rsync -a $RSYNCPATTERN "$SRCDIR" "$TGTDIR"
     exit $?
 fi
+
+# DIFFSTATUS = 0 i.e. no changes => no need to copy nor rotate, or,
+# DIFFSTATUS = 2 which is a bigger problem which cron will cough into an email.
+exit $DIFFSTATUS
