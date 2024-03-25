@@ -1,17 +1,17 @@
 
 The SHA-256 file checksums of this release:
 
-eabf0d2fb09596c8b19e6a6286da2558e0984024bde35bd247f26bc57eadebfc  ./bin/copy-and-rotate-dir-if-changes-found
-ffbb9398a56730e36c1151145744576ba5206604ba67ee8b138f5bb478b998b2  ./bin/directory-rotator
-5cffbd2352237563a576108515ad1df179f2aa143f1c39d0934033fbe8fcf103  ./bin/gpg-key-ring-refresher
-caa5bfc4734ae5a9852e5584d5ebf2f93bccaf0d399d839c8b8d19540ec7baf2  ./CHANGELOG
+0ebe48c5bf5ba320c611b41f7293ec8c6a066fb7f8a81ef420b51f4683c90805  ./bin/copy-and-rotate-dir-if-changes-found
+dd803694d0398b8c82d4ad5850ae855d18ef8e2d42dcddc61a2b555bc438df10  ./bin/directory-rotator
+bcc2d7f1811b73c520efe3b9f91216b3e8f65b58b128952da98083c466a27d9a  ./bin/gpg-key-ring-refresher
+1751e0765e8b61e571491fa9c1f71bc04f385f53bb50520060be22c04ef751dc  ./CHANGELOG
 b1eeee56c4b2a974cab11bd839b68bc7da844734bac18e8c6fc8df738883ec3d  ./docs/Configuration.md
-070195ceef02a061554941f3c4833ed850c15a7c330890ce31749bd89d8ae2c0  ./docs/Overview.md
+81d7d634b9209d462d61c8add31329440c37fdfa438a9c5cb895946ddf1a5b8e  ./docs/Overview.md
 c0b6f5656be31df85fbe809b96dc2609f6ede0158df92d097100ed6cbd092004  ./docs/Tips.md
 0609b0f2a231c6b22dc034a6ad06df43e0fad52c31adca25db96b0cd37bd9571  ./KNOWN_ISSUES
 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  ./LICENSE
 e3e41c9f24e544cfb61503089f61e3af3d7f2312bbd38070e854e6cd3f03c5ea  ./README.md
-4533065aed7c960261a231b4035cc9bcec8bff61ce6b338d43e9c50d153a4546  ./VERSION
+41709813c4666241d5ac7bd5aef08960c90632aa4e6b06cdad9389e163837336  ./VERSION
 
 PGP key id for signature verification: 0xF93BBD3EF28971EC.
 
