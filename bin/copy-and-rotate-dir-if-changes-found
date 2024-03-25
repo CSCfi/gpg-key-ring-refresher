@@ -14,7 +14,7 @@ function usage() {
     cat <<USAGE
 
     $command [ -h | --help | -? ] [ -s skip_pattern ]
-             max_rot_num source_dir target_dir
+              max_rot_num  source_dir  target_dir
 
     Options:
       -h = this help
@@ -25,7 +25,7 @@ function usage() {
     source_dir  = the source directory being tracked
     target_dir  = the target directory under which the source directory gets copied
 
-    v0.1.4
+    v0.1.5
 
 USAGE
 }
@@ -70,7 +70,7 @@ if [ $(echo -n $ROTNUM | grep -c -E '^[1-9][0-9]*$') -ne 1 ]; then
 fi
 
 if [ ! -d "$2" ]; then
-    echo "$2 - not a source directory"
+    echo "$2 - source directory does not exist."
     usage $COMMAND
     exit 1
 fi
@@ -93,6 +93,12 @@ if [ ! -d "$TGTDIR" ]; then
     mkdir -p "$TGTDIR"
     rsync -a $RSYNCPATTERN "$SRCDIR" "$TGTDIR"
     exit $?
+fi
+
+# We create the target/basedir if it does not exist,
+# so that the diff comparison fails at most with exit code 1 (not 2).
+if [ ! -d "$TGTDIR/$BASEDIR" ]; then
+    mkdir -p "$TGTDIR/$BASEDIR"
 fi
 
 # We have an existing target directory. This directory just tracks

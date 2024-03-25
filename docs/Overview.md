@@ -75,7 +75,7 @@ If you're concerned about the automatic updates leaving your PGP key ring in an 
 make sure you backup your keyring regularly, or, use the ```copy-and-rotate-dir-if-changes-found``` script
 together with the above cron invocation, e.g:
 ```
-15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps && /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh
+15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && ( /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps; /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh )
 ```
 
 If the production ring's files above differ from the secondary directory's (i.e.
@@ -83,11 +83,15 @@ If the production ring's files above differ from the secondary directory's (i.e.
 secondary tracking directory. The first integer parameter to
 ```copy-and-rotate-dir-if-changes-found``` defines the number of tracked (rotated)
 directories to be retained. After the rotation, the current production GPG ring is copied
-to create a new, fresh secondary tracking directory. Finally, if the
-gpg-key-ring-refresher updates the keyring, you may opt for appending a second
-run of ```copy-and-rotate-dir-if-changes-found``` as the last command of the cron
-run. This would leave your production GPG ring and the secondary tracking directory
-identical with the copy of the production key ring after every refresh.
+to create a new, fresh secondary tracking directory.
+
+Finally, if you want manual changes to the rings show up in separate rotated backup
+directories from those due to automated refreshes, then add a second directory rotation immediately
+after the refresh:
+
+```
+15 2 * * 6 test -x /home/user/bin/gpg-key-ring-refresher && ( /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps; /home/user/bin/gpg-key-ring-refresher -c /home/user/.gpg-key-ring-refresher.conf refresh; /home/user/bin/copy-and-rotate-dir-if-changes-found 10 /home/user/.gnupg /home/user/.gnupg.bkps; )
+```
 
 ## 4. Monitoring for or alerting on errors
 

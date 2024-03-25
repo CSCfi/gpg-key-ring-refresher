@@ -1,3 +1,10 @@
+2024-03-25  Mika Silander <mika.silander@csc.fi>
+
+	Fixed diff comparison problem in copy-and-rotate-dir-if-changes-found.
+	Fixed error in the cron invocation instructions in the Overview.
+
+	Version 0.1.5
+
 2024-02-09  Mika Silander <mika.silander@csc.fi>
 
 	Added aux scripts directory-rotator and copy-and-rotate-dir-if-changes-found
